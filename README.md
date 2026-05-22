@@ -8,6 +8,43 @@ via the Claude Agent SDK, with tools that operate on your actual desktop
 
 Single-user, single-channel, single-guild. Not multi-tenant.
 
+## NOTICE -- intended use
+
+This project is a **personal remote-control** for the operator's own PC. It
+is not a service, not a Claude proxy, not a way to share Claude access, not
+a multi-tenant bot. It is functionally equivalent to SSH-ing into your own
+machine and typing into your own terminal: same operator, same hardware,
+same Claude session, different keyboard.
+
+The code enforces this at the auth layer (`src/.../auth.py`):
+
+- Messages are accepted only from one hardcoded Discord user ID, in one
+  hardcoded channel, in one hardcoded guild.
+- DMs are rejected.
+- The check runs before any LLM dispatch, on every message, with no
+  override or admin mode.
+
+If you use **API mode** (`ANTHROPIC_API_KEY` set), you are billed per token
+through your own Anthropic API account; standard API terms apply.
+
+If you use **subscription mode** (`claude /login`, no API key), the bot's
+spawned Claude Code talks to Anthropic on your Pro/Max plan. Anthropic's
+Pro/Max plans are intended for the subscriber's personal use; this project
+is designed to stay within that intent: only YOU (the subscriber) can
+trigger turns, your messages drive every interaction, and there is no
+unattended automation. If your use case might fall outside personal use
+(high-volume background jobs, sharing the channel with other people,
+automating prompts without your direct input, etc.), use API mode instead
+or check Anthropic's current Usage Policy and Pro/Max terms before running.
+
+**Do not** modify the auth check to allow additional users, additional
+channels, or DM access. The single-user property is what keeps this on the
+right side of "remote-controlling my own Claude" vs. "running a Claude
+service." If you need multi-user, build something with the Anthropic API
+under appropriate terms, not this.
+
+Anthropic's Usage Policy: <https://www.anthropic.com/legal/usage-policy>
+
 ## Status
 
 Built incrementally. Each step ends with a working, testable artifact.
