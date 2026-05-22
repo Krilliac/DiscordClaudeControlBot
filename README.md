@@ -14,12 +14,12 @@ Built incrementally. Each step ends with a working, testable artifact.
 
 - [x] Step 1: skeleton + config + auth gating (ping/pong, no agent yet)
 - [x] Step 2: power management (`PowerCreateRequest`)
-- [ ] Step 3: Claude Agent SDK loop with streaming responses
-- [ ] Step 4: `!stop` hard kill switch wired to cancel the agent
-- [ ] Step 5: tools (PowerShell, files, screenshot, input, processes)
-- [ ] Step 6: idle/active session state machine
-- [ ] Step 7: NSSM service install
-- [ ] Step 8: Modern Standby end-to-end validation
+- [x] Step 3: Claude Agent SDK loop with streaming responses
+- [x] Step 4: `!stop` hard kill switch wired to cancel the agent
+- [x] Step 5: tools (PowerShell, files, screenshot, input, processes)
+- [x] Step 6: idle/active session state machine
+- [x] Step 7: NSSM service install (scripts shipped; manual run required)
+- [ ] Step 8: Modern Standby end-to-end validation (user-side, after install)
 
 ## Prerequisites
 

@@ -23,6 +23,8 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    McpSdkServerConfig,
+    McpServerConfig,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -67,12 +69,16 @@ class AgentSession:
         config: AgentConfig,
         session_store: _SessionStore,
         system_prompt: str | None = None,
+        mcp_server: McpSdkServerConfig | None = None,
+        allowed_tools: list[str] | None = None,
         *,
         client_factory: ClientFactory = _default_client_factory,
     ) -> None:
         self._config = config
         self._store = session_store
         self._system_prompt = system_prompt
+        self._mcp_server = mcp_server
+        self._allowed_tools = list(allowed_tools) if allowed_tools else []
         self._client_factory = client_factory
         self._client: ClaudeSDKClient | None = None
         self._current_session_id: str | None = None
@@ -89,11 +95,16 @@ class AgentSession:
         if self._client is not None:
             return
         resume = self._store.load()
+        mcp_servers: dict[str, McpServerConfig] = (
+            {"dcc": self._mcp_server} if self._mcp_server is not None else {}
+        )
         options = ClaudeAgentOptions(
             model=self._config.model,
             system_prompt=self._system_prompt,
             resume=resume,
             max_turns=self._config.max_tool_calls_per_message,
+            mcp_servers=mcp_servers,
+            allowed_tools=self._allowed_tools,
         )
         client = self._client_factory(options)
         await client.connect()

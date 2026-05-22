@@ -15,6 +15,8 @@ from .power import PowerRequest
 from .session import SessionState
 from .session_persist import SessionIdStore
 from .system_prompt import DEFAULT_SYSTEM_PROMPT
+from .tools import build_tools
+from .tools._context import reset_channel, set_channel
 
 log = logging.getLogger(__name__)
 
@@ -42,10 +44,13 @@ class DispatchBot(discord.Client):
         # from its environment. setdefault avoids stomping a real shell value.
         os.environ.setdefault("ANTHROPIC_API_KEY", self._secrets.anthropic_api_key)
         store = SessionIdStore(Path(self.config.agent.conversation_db_path))
+        mcp_server, allowed_tools = build_tools(self.config.tools)
         self._agent = AgentSession(
             config=self.config.agent,
             session_store=store,
             system_prompt=DEFAULT_SYSTEM_PROMPT,
+            mcp_server=mcp_server,
+            allowed_tools=allowed_tools,
         )
         await self._agent.connect()
 
@@ -138,6 +143,7 @@ class DispatchBot(discord.Client):
         session = self._session
 
         async def _run() -> None:
+            token = set_channel(message.channel)
             try:
                 async with message.channel.typing():
                     await agent.submit(message.content, sink)
@@ -147,9 +153,7 @@ class DispatchBot(discord.Client):
             except Exception:
                 log.exception("agent task crashed")
             finally:
-                # Refresh activity so the idle timer counts from end-of-turn
-                # rather than start-of-turn. Tool calls (step 5+) ping
-                # mid-stream too.
+                reset_channel(token)
                 if session is not None:
                     session.ping("turn complete")
 
