@@ -18,7 +18,7 @@ def _setup_logging(level: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="duet-dispatch")
+    parser = argparse.ArgumentParser(prog="discord-claude-control")
     parser.add_argument("--config", default="config.toml", help="path to config.toml")
     args = parser.parse_args(argv)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from duet_dispatch.auth import is_authorized
-from duet_dispatch.config import DiscordConfig
+from discord_claude_control.auth import is_authorized
+from discord_claude_control.config import DiscordConfig
 
 CFG = DiscordConfig(
     allowed_user_id=111,

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "duet-dispatch"
+name = "discord-claude-control"
 version = "0.1.0"
 description = "Discord-controlled personal PC agent using the Claude Agent SDK"
 requires-python = ">=3.12"
@@ -22,10 +22,10 @@ dev = [
 ]
 
 [project.scripts]
-duet-dispatch = "duet_dispatch.main:main"
+discord-claude-control = "discord_claude_control.main:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/duet_dispatch"]
+packages = ["src/discord_claude_control"]
 
 [tool.ruff]
 line-length = 100

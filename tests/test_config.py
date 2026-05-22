@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from duet_dispatch.config import ConfigError, build_config, load_config
+from discord_claude_control.config import ConfigError, build_config, load_config
 
 
 def _minimal_raw() -> dict[str, Any]:
