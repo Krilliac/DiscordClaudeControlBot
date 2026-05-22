@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "duet-dispatch"
+version = "0.1.0"
+description = "Discord-controlled personal PC agent using the Claude Agent SDK"
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py>=2.4,<3",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "black>=24.0",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+duet-dispatch = "duet_dispatch.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/duet_dispatch"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "C4", "SIM", "RUF"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+explicit_package_bases = true
+# Library-specific overrides are added in the step that introduces each dep.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"

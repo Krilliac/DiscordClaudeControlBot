@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, get_args
+
+from dotenv import load_dotenv
+
+InputAuthMode = Literal["autonomous", "confirm_destructive", "confirm_all"]
+_INPUT_AUTH_MODES: tuple[str, ...] = get_args(InputAuthMode)
+
+
+@dataclass(frozen=True)
+class DiscordConfig:
+    allowed_user_id: int
+    allowed_channel_id: int
+    allowed_guild_id: int
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    model: str
+    max_tool_calls_per_message: int
+    conversation_db_path: str
+
+
+@dataclass(frozen=True)
+class SessionConfig:
+    idle_timeout_minutes: int
+
+
+@dataclass(frozen=True)
+class ToolsConfig:
+    input_auth_mode: InputAuthMode
+    restrict_paths: bool
+    allow_roots: tuple[str, ...]
+    enabled: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LoggingConfig:
+    audit_log_path: str
+    level: str
+
+
+@dataclass(frozen=True)
+class Config:
+    discord: DiscordConfig
+    agent: AgentConfig
+    session: SessionConfig
+    tools: ToolsConfig
+    logging: LoggingConfig
+
+
+@dataclass(frozen=True)
+class Secrets:
+    anthropic_api_key: str
+    discord_bot_token: str
+
+
+class ConfigError(ValueError):
+    """Raised when config.toml is malformed or missing required values."""
+
+
+def load_config(config_path: Path | str = "config.toml") -> Config:
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"config.toml not found at {path}")
+    with path.open("rb") as f:
+        raw: dict[str, Any] = tomllib.load(f)
+    return build_config(raw)
+
+
+def load_secrets() -> Secrets:
+    load_dotenv()
+    return Secrets(
+        anthropic_api_key=_require_env("ANTHROPIC_API_KEY"),
+        discord_bot_token=_require_env("DISCORD_BOT_TOKEN"),
+    )
+
+
+def build_config(raw: dict[str, Any]) -> Config:
+    discord = _section(raw, "discord", required=True)
+    agent = _section(raw, "agent")
+    session = _section(raw, "session")
+    tools = _section(raw, "tools")
+    logging_ = _section(raw, "logging")
+
+    discord_cfg = DiscordConfig(
+        allowed_user_id=_int(discord, "allowed_user_id"),
+        allowed_channel_id=_int(discord, "allowed_channel_id"),
+        allowed_guild_id=_int(discord, "allowed_guild_id"),
+    )
+    for name in ("allowed_user_id", "allowed_channel_id", "allowed_guild_id"):
+        if getattr(discord_cfg, name) <= 0:
+            raise ConfigError(f"discord.{name} must be a positive Discord snowflake ID")
+
+    agent_cfg = AgentConfig(
+        model=_str(agent, "model", default="claude-opus-4-7"),
+        max_tool_calls_per_message=_int(agent, "max_tool_calls_per_message", default=20),
+        conversation_db_path=_str(agent, "conversation_db_path", default="conversation.db"),
+    )
+    if agent_cfg.max_tool_calls_per_message <= 0:
+        raise ConfigError("agent.max_tool_calls_per_message must be > 0")
+
+    session_cfg = SessionConfig(
+        idle_timeout_minutes=_int(session, "idle_timeout_minutes", default=10),
+    )
+    if session_cfg.idle_timeout_minutes <= 0:
+        raise ConfigError("session.idle_timeout_minutes must be > 0")
+
+    mode_str = _str(tools, "input_auth_mode", default="autonomous")
+    if mode_str not in _INPUT_AUTH_MODES:
+        raise ConfigError(
+            f"tools.input_auth_mode must be one of {_INPUT_AUTH_MODES}, got {mode_str!r}"
+        )
+
+    tools_cfg = ToolsConfig(
+        input_auth_mode=mode_str,  # type: ignore[arg-type]
+        restrict_paths=_bool(tools, "restrict_paths", default=False),
+        allow_roots=tuple(_str_list(tools, "allow_roots", default=[])),
+        enabled=tuple(_str_list(tools, "enabled", default=[])),
+    )
+
+    logging_cfg = LoggingConfig(
+        audit_log_path=_str(logging_, "audit_log_path", default="audit.log"),
+        level=_str(logging_, "level", default="INFO").upper(),
+    )
+
+    return Config(
+        discord=discord_cfg,
+        agent=agent_cfg,
+        session=session_cfg,
+        tools=tools_cfg,
+        logging=logging_cfg,
+    )
+
+
+def _section(raw: dict[str, Any], name: str, *, required: bool = False) -> dict[str, Any]:
+    value = raw.get(name)
+    if value is None:
+        if required:
+            raise ConfigError(f"config: missing required section [{name}]")
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"config: section [{name}] must be a table")
+    return value
+
+
+_MISSING: Any = object()
+
+
+def _int(section: dict[str, Any], key: str, *, default: int = _MISSING) -> int:
+    value = section.get(key, _MISSING)
+    if value is _MISSING:
+        if default is _MISSING:
+            raise ConfigError(f"config: missing required int {key}")
+        return default
+    # bool is a subclass of int; reject it explicitly so true/false isn't accepted as 1/0.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"config: {key} must be an integer")
+    return value
+
+
+def _str(section: dict[str, Any], key: str, *, default: str = _MISSING) -> str:
+    value = section.get(key, _MISSING)
+    if value is _MISSING:
+        if default is _MISSING:
+            raise ConfigError(f"config: missing required string {key}")
+        return default
+    if not isinstance(value, str):
+        raise ConfigError(f"config: {key} must be a string")
+    return value
+
+
+def _bool(section: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = section.get(key, _MISSING)
+    if value is _MISSING:
+        return default
+    if not isinstance(value, bool):
+        raise ConfigError(f"config: {key} must be a boolean")
+    return value
+
+
+def _str_list(section: dict[str, Any], key: str, *, default: list[str]) -> list[str]:
+    value = section.get(key, _MISSING)
+    if value is _MISSING:
+        return list(default)
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ConfigError(f"config: {key} must be a list of strings")
+    return list(value)
+
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ConfigError(f"required env var {name} is missing or empty (set it in .env)")
+    return value

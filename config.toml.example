@@ -1,0 +1,45 @@
+# Copy to config.toml and fill in real Discord IDs.
+# Enable Developer Mode in Discord, then right-click -> Copy ID.
+
+[discord]
+allowed_user_id = 0
+allowed_channel_id = 0
+allowed_guild_id = 0
+
+[agent]
+model = "claude-opus-4-7"
+max_tool_calls_per_message = 20
+conversation_db_path = "conversation.db"
+
+[session]
+idle_timeout_minutes = 10
+
+[tools]
+# Mode for confirmation prompts on input-simulation and process tools.
+#   "autonomous"          - no prompts, full speed
+#   "confirm_destructive" - prompt before kill_process and launch_app only
+#   "confirm_all"         - prompt before every input/process tool call
+input_auth_mode = "autonomous"
+
+# When true, filesystem tools refuse paths outside `allow_roots`.
+restrict_paths = false
+allow_roots = []
+
+# Tools registered with the agent. Comment a name out to disable it.
+enabled = [
+    "run_powershell",
+    "read_file",
+    "write_file",
+    "list_dir",
+    "screenshot",
+    "move_mouse",
+    "click",
+    "type_text",
+    "press_key",
+    "launch_app",
+    "kill_process",
+]
+
+[logging]
+audit_log_path = "audit.log"
+level = "INFO"
