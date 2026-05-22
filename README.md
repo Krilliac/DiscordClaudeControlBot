@@ -55,7 +55,7 @@ Built incrementally. Each step ends with a working, testable artifact.
 - [x] Step 4: `!stop` hard kill switch wired to cancel the agent
 - [x] Step 5: tools (PowerShell, files, screenshot, input, processes)
 - [x] Step 6: idle/active session state machine
-- [x] Step 7: NSSM service install (scripts shipped; manual run required)
+- [x] Step 7: Unattended install scripts (Task Scheduler primary, NSSM service alternative)
 - [x] Step 9 (post-redesign): broker + local attach socket + subscription-auth mode
 - [ ] Step 8: Modern Standby end-to-end validation (user-side, after install)
 
@@ -102,7 +102,9 @@ keeps running.
   **Message Content Intent** in the Discord Developer Portal.
 - Your Discord user, channel, and guild IDs (Developer Mode -> right-click -> Copy ID).
 - An Anthropic API key.
-- (Later) [NSSM](https://nssm.cc/) for service install.
+- For unattended deploy: nothing extra (Task Scheduler ships with Windows).
+  Optional: [NSSM](https://nssm.cc/) only if you need a headless service
+  with no desktop-interactive tools (see Deployment below).
 
 ## First-time setup
 
@@ -161,14 +163,48 @@ stub so unit tests can still run.
 
 ## Design notes
 
+### Deployment: Task Scheduler primary, NSSM secondary
+
+The bot needs access to your visible desktop -- BitBlt for screenshots,
+SendInput for mouse/keyboard, GDI for window queries. None of those
+work in **Session 0**, the non-interactive session Windows services
+run in (regardless of which account the service logs on as). Session 0
+isolation has been the rule since Vista; it's not a configuration we
+can flip off.
+
+So the supported deploy is **Task Scheduler at user logon**:
+
+```powershell
+.\src\discord_claude_control\service\task_install.ps1
+```
+
+The bot runs as a normal child process of your interactive session.
+Screenshot, click, type_text, the whole tool set works. The trade-off:
+the bot only runs while a user is logged in. After a reboot, sign in
+once and it starts a few seconds later; for fully unattended boot,
+configure Windows auto-logon (`netplwiz`).
+
+NSSM is shipped as a fallback for the rare case where you need a
+service that runs before any user logon AND you don't need the
+desktop-interactive tools:
+
+```powershell
+.\src\discord_claude_control\service\nssm_install.ps1
+```
+
+The NSSM script self-elevates and prompts for your Windows password to
+configure log-on as your user account (so the bot can read `%USERPROFILE%`
+and HKCU). But `BitBlt` still fails in Session 0 -- disable
+`screenshot`, `click`, `move_mouse`, `type_text`, `press_key`, and
+`launch_app` in `config.toml`'s `[tools].enabled` list if you go this
+route.
+
 ### Why NSSM over a native Win32 service?
 
-NSSM is a one-line install (`nssm install discord-claude-control ...`),
-runs any Python script as a service, and lets us run under the logged-in
-user account -- which is required for the screenshot/input tools to
-interact with the visible desktop session. A native `pywin32` service
-would buy nothing here and adds more code to maintain. The NSSM scripts
-land in step 7.
+When a service IS the right shape (headless only), NSSM is a one-line
+install, runs any Python script as a service, and supports user-account
+log-on. A native `pywin32` service would buy nothing here and adds more
+code to maintain.
 
 ### Why Modern Standby instead of WoL?
 
