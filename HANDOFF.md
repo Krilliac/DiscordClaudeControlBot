@@ -109,39 +109,92 @@ If `using backend: stub` appears in the CLI output, the Windows backend
 failed to load -- check the python version, kernel32 availability, or
 report back.
 
-## 3. NSSM service install
+## 3. Install at user logon (Task Scheduler) -- RECOMMENDED
 
-Download nssm.exe from <https://nssm.cc/> and drop it somewhere stable,
-e.g. `C:\Tools\nssm.exe`.
-
-In an **elevated** PowerShell:
+This is the supported path for desktop-aware automation. The bot runs in
+your interactive session (Session 1+), where `BitBlt` and the rest of
+the screenshot/input tools actually work.
 
 ```powershell
 cd C:\path\to\DiscordClaudeControlBot
-.\src\discord_claude_control\service\nssm_install.ps1 -NssmPath C:\Tools\nssm.exe
+.\src\discord_claude_control\service\task_install.ps1
 ```
 
-The script prints follow-up instructions. The critical manual step:
+No elevation. No password prompt. The script:
+
+- Registers `\discord-claude-control\bot` triggered at your logon.
+- Wraps python in `cmd.exe` so stdout/stderr go to `logs\stdout.log` and
+  `logs\stderr.log`.
+- Starts it immediately (pass `-NoStart` to defer until next logon).
+
+Verify:
 
 ```powershell
-& 'C:\Tools\nssm.exe' edit discord-claude-control
+.\src\discord_claude_control\service\task_status.ps1
+Get-Content logs\stderr.log -Tail 10
 ```
 
-In the dialog that opens, **Log on** tab -> "This account" -> enter
-`.\<your-username>` and your Windows password. (LocalSystem can't talk to
-your visible desktop, so screenshot and input tools would otherwise
-fail.)
+You should see `connected as <bot>#... (id=...)` near the bottom. Then
+re-test the smoke checklist from step 1.
 
-Then:
+Uninstall:
 
 ```powershell
-& 'C:\Tools\nssm.exe' start discord-claude-control
-& 'C:\Tools\nssm.exe' status discord-claude-control
+.\src\discord_claude_control\service\task_uninstall.ps1
+```
+
+### What "survives reboots" means here
+
+The task fires at user logon. After a reboot:
+
+- If you sign in normally, the bot starts a few seconds later. Standard
+  case.
+- If you want the PC to come up bot-running with no human interaction,
+  enable Windows Auto-Logon (`netplwiz` -> uncheck "Users must enter a
+  user name and password"). The user session is recreated automatically
+  at boot, and the logon trigger fires inside it.
+
+True boot-time start before any user logs on requires a Windows
+**service** (step 3 alt.), which can NOT run the desktop-interactive
+tools.
+
+## 3 alt. NSSM service (headless tools only)
+
+Use this **only** if you genuinely need a service that survives reboots
+without any user logon AND you are willing to disable
+`screenshot`/`click`/`move_mouse`/`type_text`/`press_key`/`launch_app`
+in `config.toml`. Services run in Session 0, where GDI/USER calls
+against the visible desktop fail.
+
+Install NSSM (winget is simplest):
+
+```powershell
+winget install --id NSSM.NSSM --source winget
+```
+
+Or download from <https://nssm.cc/> and drop `nssm.exe` somewhere stable
+(e.g. `C:\Tools\nssm.exe`).
+
+Then run the install script -- it self-elevates and prompts for your
+Windows password (used to set the service log-on account):
+
+```powershell
+cd C:\path\to\DiscordClaudeControlBot
+.\src\discord_claude_control\service\nssm_install.ps1
+```
+
+Verify:
+
+```powershell
 .\src\discord_claude_control\service\nssm_status.ps1
+Get-Content logs\stderr.log -Tail 10
 ```
 
-Check `logs\stdout.log` and `logs\stderr.log` for any errors. Re-test
-the smoke checklist from step 1 with the service running.
+Uninstall:
+
+```powershell
+.\src\discord_claude_control\service\nssm_uninstall.ps1
+```
 
 ## 4. Modern Standby end-to-end
 

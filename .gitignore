@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+config.toml
 *.db
 *.log
 .mypy_cache/
@@ -13,3 +14,4 @@ dist/
 build/
 .idea/
 .vscode/
+logs/
