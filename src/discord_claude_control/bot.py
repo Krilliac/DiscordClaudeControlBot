@@ -8,6 +8,7 @@ from pathlib import Path
 import discord
 
 from .agent import AgentSession
+from .audit import setup_audit_logger
 from .auth import is_authorized_message
 from .config import Config, Secrets
 from .discord_sink import DiscordResponseSink
@@ -43,6 +44,7 @@ class DispatchBot(discord.Client):
         # The SDK spawns the Claude Code CLI, which reads ANTHROPIC_API_KEY
         # from its environment. setdefault avoids stomping a real shell value.
         os.environ.setdefault("ANTHROPIC_API_KEY", self._secrets.anthropic_api_key)
+        setup_audit_logger(self.config.logging.audit_log_path)
         store = SessionIdStore(Path(self.config.agent.conversation_db_path))
         mcp_server, allowed_tools = build_tools(self.config.tools)
         self._agent = AgentSession(

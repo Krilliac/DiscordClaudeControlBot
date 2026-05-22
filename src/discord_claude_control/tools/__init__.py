@@ -10,10 +10,12 @@ not listed in `config.tools.enabled` are not registered.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server
 
+from ..audit import audit_wrap
 from ..config import ToolsConfig
 from .files import build_file_tools
 from .input import build_input_tools
@@ -81,7 +83,13 @@ def build_tools(
         log.info("no tools enabled; agent will run text-only")
         return None, []
 
-    server = create_sdk_mcp_server(MCP_SERVER_NAME, tools=list(registered.values()))
-    allowed = [f"mcp__{MCP_SERVER_NAME}__{name}" for name in registered]
-    log.info("registered %d tools: %s", len(registered), sorted(registered))
+    # Wrap every tool's handler so audit.log captures the invocation.
+    audited = {
+        name: replace(tool_obj, handler=audit_wrap(name, tool_obj.handler))
+        for name, tool_obj in registered.items()
+    }
+
+    server = create_sdk_mcp_server(MCP_SERVER_NAME, tools=list(audited.values()))
+    allowed = [f"mcp__{MCP_SERVER_NAME}__{name}" for name in audited]
+    log.info("registered %d tools: %s", len(audited), sorted(audited))
     return server, allowed
