@@ -24,6 +24,8 @@ class AgentConfig:
     model: str
     max_tool_calls_per_message: int
     conversation_db_path: str
+    system_prompt: str | None
+    system_prompt_path: str | None
 
 
 @dataclass(frozen=True)
@@ -119,9 +121,13 @@ def build_config(raw: dict[str, Any]) -> Config:
         model=_str(agent, "model", default="claude-opus-4-7"),
         max_tool_calls_per_message=_int(agent, "max_tool_calls_per_message", default=20),
         conversation_db_path=_str(agent, "conversation_db_path", default="conversation.db"),
+        system_prompt=_optional_str(agent, "system_prompt"),
+        system_prompt_path=_optional_str(agent, "system_prompt_path"),
     )
     if agent_cfg.max_tool_calls_per_message <= 0:
         raise ConfigError("agent.max_tool_calls_per_message must be > 0")
+    if agent_cfg.system_prompt is not None and agent_cfg.system_prompt_path is not None:
+        raise ConfigError("agent.system_prompt and agent.system_prompt_path are mutually exclusive")
 
     session_cfg = SessionConfig(
         idle_timeout_minutes=_int(session, "idle_timeout_minutes", default=10),
@@ -200,6 +206,15 @@ def _str(section: dict[str, Any], key: str, *, default: str = _MISSING) -> str:
     if not isinstance(value, str):
         raise ConfigError(f"config: {key} must be a string")
     return value
+
+
+def _optional_str(section: dict[str, Any], key: str) -> str | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"config: {key} must be a string")
+    return value if value else None
 
 
 def _bool(section: dict[str, Any], key: str, *, default: bool) -> bool:

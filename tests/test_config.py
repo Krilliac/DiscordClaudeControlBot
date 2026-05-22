@@ -32,6 +32,49 @@ def test_minimal_config_loads_with_defaults() -> None:
     assert cfg.tools.enabled == ()
     assert cfg.logging.level == "INFO"
     assert cfg.logging.audit_log_path == "audit.log"
+    assert cfg.agent.system_prompt is None
+    assert cfg.agent.system_prompt_path is None
+    assert cfg.attach.enabled is False
+    assert cfg.attach.host == "127.0.0.1"
+    assert cfg.attach.port == 9876
+
+
+def test_system_prompt_inline_set() -> None:
+    raw = _minimal_raw()
+    raw["agent"] = {"system_prompt": "You are a teapot."}
+    cfg = build_config(raw)
+    assert cfg.agent.system_prompt == "You are a teapot."
+    assert cfg.agent.system_prompt_path is None
+
+
+def test_system_prompt_path_set() -> None:
+    raw = _minimal_raw()
+    raw["agent"] = {"system_prompt_path": "prompts/custom.txt"}
+    cfg = build_config(raw)
+    assert cfg.agent.system_prompt is None
+    assert cfg.agent.system_prompt_path == "prompts/custom.txt"
+
+
+def test_system_prompt_inline_and_path_rejected() -> None:
+    raw = _minimal_raw()
+    raw["agent"] = {"system_prompt": "x", "system_prompt_path": "y.txt"}
+    with pytest.raises(ConfigError, match="mutually exclusive"):
+        build_config(raw)
+
+
+def test_attach_enabled_with_valid_port() -> None:
+    raw = _minimal_raw()
+    raw["attach"] = {"enabled": True, "port": 12345}
+    cfg = build_config(raw)
+    assert cfg.attach.enabled is True
+    assert cfg.attach.port == 12345
+
+
+def test_attach_enabled_invalid_port_rejected() -> None:
+    raw = _minimal_raw()
+    raw["attach"] = {"enabled": True, "port": 70000}
+    with pytest.raises(ConfigError, match=r"attach\.port"):
+        build_config(raw)
 
 
 def test_missing_discord_section_rejected() -> None:

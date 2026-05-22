@@ -91,6 +91,8 @@ def _agent_config() -> AgentConfig:
         model="claude-opus-4-7",
         max_tool_calls_per_message=20,
         conversation_db_path="conversation.db",
+        system_prompt=None,
+        system_prompt_path=None,
     )
 
 

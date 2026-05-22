@@ -30,19 +30,18 @@ Standby is not available and step 8 won't work.
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e .[dev]
-copy .env.example .env
-copy config.toml.example config.toml
+python -m discord_claude_control.setup
 ```
 
-Edit:
+The wizard prompts for the Discord bot token, your three Discord IDs
+(user/channel/guild), optional Anthropic API key, model, idle timeout,
+and whether to enable the attach socket. It validates each value
+(token length, snowflake format, positive integers), then writes
+`.env` + `config.toml`.
 
-- `.env`            : fill in `DISCORD_BOT_TOKEN`. `ANTHROPIC_API_KEY` is
-  optional -- leave it commented to use your Claude Pro/Max subscription
-  instead (see step 1b).
-- `config.toml`     : set `allowed_user_id`, `allowed_channel_id`,
-  `allowed_guild_id` to your real Discord IDs (Developer Mode -> right
-  click -> Copy ID). If you want local attach, also set
-  `attach.enabled = true`.
+If you'd rather edit by hand: `copy .env.example .env` and
+`copy config.toml.example config.toml`, then fill them in. The example
+files are extensively commented.
 
 ## 1b. Choose auth mode (one of these)
 

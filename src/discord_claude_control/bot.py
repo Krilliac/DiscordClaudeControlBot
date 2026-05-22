@@ -12,7 +12,7 @@ from .attach_server import AttachServer
 from .audit import setup_audit_logger
 from .auth import is_authorized_message
 from .broker import AgentBroker
-from .config import Config, Secrets
+from .config import AgentConfig, Config, Secrets
 from .discord_sink import DiscordResponseSink
 from .power import PowerRequest
 from .session import SessionState
@@ -65,7 +65,7 @@ class DispatchBot(discord.Client):
         self._agent = AgentSession(
             config=self.config.agent,
             session_store=store,
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            system_prompt=_resolve_system_prompt(self.config.agent),
             mcp_server=mcp_server,
             allowed_tools=allowed_tools,
         )
@@ -187,6 +187,21 @@ class DispatchBot(discord.Client):
             task = asyncio.create_task(_finalize())
             self._finalize_tasks.add(task)
             task.add_done_callback(self._finalize_tasks.discard)
+
+
+def _resolve_system_prompt(agent_cfg: AgentConfig) -> str:
+    if agent_cfg.system_prompt is not None:
+        return agent_cfg.system_prompt
+    if agent_cfg.system_prompt_path is not None:
+        path = Path(agent_cfg.system_prompt_path)
+        if not path.exists():
+            log.warning(
+                "agent.system_prompt_path %s does not exist; falling back to default",
+                path,
+            )
+            return DEFAULT_SYSTEM_PROMPT
+        return path.read_text(encoding="utf-8")
+    return DEFAULT_SYSTEM_PROMPT
 
 
 def run_bot(config: Config, secrets: Secrets) -> None:

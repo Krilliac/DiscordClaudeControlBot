@@ -112,7 +112,17 @@ cd DiscordClaudeControlBot
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e .[dev]
-copy .env.example .env                 # fill in ANTHROPIC_API_KEY and DISCORD_BOT_TOKEN
+python -m discord_claude_control.setup    # interactive wizard
+```
+
+The wizard walks you through every required value, validates them, and
+writes `.env` (secrets) + `config.toml` (the rest). Both are gitignored;
+the repo only ships the `.example` files.
+
+If you'd rather do it by hand:
+
+```powershell
+copy .env.example .env                 # fill in DISCORD_BOT_TOKEN (and optionally ANTHROPIC_API_KEY)
 copy config.toml.example config.toml   # fill in user/channel/guild IDs
 ```
 

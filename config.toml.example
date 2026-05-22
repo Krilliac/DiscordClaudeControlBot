@@ -1,31 +1,65 @@
-# Copy to config.toml and fill in real Discord IDs.
-# Enable Developer Mode in Discord, then right-click -> Copy ID.
+# Example config for discord-claude-control.
+# Copy to config.toml and fill in the required values.
+# (Or run `python -m discord_claude_control.setup` for an interactive walkthrough.)
+# This file is committed; config.toml is gitignored.
 
+# ---------------------------------------------------------------------------
+# REQUIRED: Discord identity. Enable Developer Mode in Discord
+# (Settings -> Advanced) and right-click each target -> Copy ID.
+# All three IDs must match for a message to be accepted -- DMs are rejected.
+# ---------------------------------------------------------------------------
 [discord]
-allowed_user_id = 0
+allowed_user_id    = 0
 allowed_channel_id = 0
-allowed_guild_id = 0
+allowed_guild_id   = 0
 
+# ---------------------------------------------------------------------------
+# Claude model + agent behavior.
+# ---------------------------------------------------------------------------
 [agent]
+# Any Claude model ID. Common choices: "claude-opus-4-7", "claude-sonnet-4-6",
+# "claude-haiku-4-5". Pin to a dated suffix for build reproducibility.
 model = "claude-opus-4-7"
+
+# Hard cap on tool calls within a single user turn. Stops runaway loops.
 max_tool_calls_per_message = 20
+
+# SQLite file that remembers the active Claude Code session id across
+# service restarts. The actual conversation content lives in Claude
+# Code's own session files under ~/.claude/projects/.
 conversation_db_path = "conversation.db"
 
+# Optional: override the bot's system prompt. Pick AT MOST ONE.
+#   system_prompt      = "You are my personal..."        # inline
+#   system_prompt_path = "prompts/personal.txt"          # read from file
+# Omit both to use the built-in default in system_prompt.py.
+
+# ---------------------------------------------------------------------------
+# Idle/active session state. While "active" the bot holds a power request
+# so the PC stays awake. After this many minutes of silence it releases
+# and lets Modern Standby park the CPU; Discord stays connected.
+# ---------------------------------------------------------------------------
 [session]
 idle_timeout_minutes = 10
 
+# ---------------------------------------------------------------------------
+# Tools the agent can invoke.
+# ---------------------------------------------------------------------------
 [tools]
-# Mode for confirmation prompts on input-simulation and process tools.
-#   "autonomous"          - no prompts, full speed
-#   "confirm_destructive" - prompt before kill_process and launch_app only
-#   "confirm_all"         - prompt before every input/process tool call
+# Confirmation prompts for input/process tools:
+#   "autonomous"          -- no prompts, full speed (default)
+#   "confirm_destructive" -- prompt before kill_process / launch_app
+#   "confirm_all"         -- prompt before every input/process tool call
+# Note: confirm_* are recognized but not yet wired up; they currently
+# behave like "autonomous" and log a warning at startup.
 input_auth_mode = "autonomous"
 
-# When true, filesystem tools refuse paths outside `allow_roots`.
+# When true, read_file / write_file / list_dir refuse paths outside any
+# directory in allow_roots. Off by default (it's your machine).
 restrict_paths = false
-allow_roots = []
+allow_roots    = []
 
-# Tools registered with the agent. Comment a name out to disable it.
+# Tools the agent can call. Comment out a name to hide it from Claude.
 enabled = [
     "run_powershell",
     "read_file",
@@ -40,13 +74,24 @@ enabled = [
     "kill_process",
 ]
 
+# ---------------------------------------------------------------------------
+# Logging.
+# ---------------------------------------------------------------------------
 [logging]
+# Tool-invocation audit log. One JSON line per call. Rotates at 5 MB,
+# keeps 5 backups.
 audit_log_path = "audit.log"
+
+# Python logging level for the bot itself: DEBUG / INFO / WARNING / ERROR.
 level = "INFO"
 
+# ---------------------------------------------------------------------------
+# Local-attach socket. When enabled, `python -m discord_claude_control.attach`
+# can connect from any local terminal and drive the same conversation
+# Discord is driving. Loopback only -- do not bind to a public interface
+# without adding your own authentication on top.
+# ---------------------------------------------------------------------------
 [attach]
-# Local-attach server: lets `python -m discord_claude_control.attach` talk to
-# the same Claude conversation the Discord channel is driving. Loopback only.
 enabled = false
-host = "127.0.0.1"
-port = 9876
+host    = "127.0.0.1"
+port    = 9876
