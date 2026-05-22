@@ -77,6 +77,85 @@ def test_attach_enabled_invalid_port_rejected() -> None:
         build_config(raw)
 
 
+def test_default_stop_and_ping_commands() -> None:
+    cfg = build_config(_minimal_raw())
+    assert cfg.discord.stop_command == "!stop"
+    assert cfg.discord.ping_command == "ping"
+
+
+def test_custom_stop_and_ping_commands() -> None:
+    raw = _minimal_raw()
+    raw["discord"]["stop_command"] = "!halt"
+    raw["discord"]["ping_command"] = "alive"
+    cfg = build_config(raw)
+    assert cfg.discord.stop_command == "!halt"
+    assert cfg.discord.ping_command == "alive"
+
+
+def test_empty_stop_command_rejected() -> None:
+    raw = _minimal_raw()
+    raw["discord"]["stop_command"] = "   "
+    with pytest.raises(ConfigError, match="stop_command"):
+        build_config(raw)
+
+
+def test_stop_and_ping_must_differ() -> None:
+    raw = _minimal_raw()
+    raw["discord"]["stop_command"] = "halt"
+    raw["discord"]["ping_command"] = "halt"
+    with pytest.raises(ConfigError, match="differ"):
+        build_config(raw)
+
+
+def test_default_tool_truncate_and_timeout() -> None:
+    cfg = build_config(_minimal_raw())
+    assert cfg.tools.output_truncate_at == 1500
+    assert cfg.tools.powershell_default_timeout_s == 30
+
+
+def test_custom_tool_truncate_and_timeout() -> None:
+    raw = _minimal_raw()
+    raw["tools"] = {"output_truncate_at": 9999, "powershell_default_timeout_s": 120}
+    cfg = build_config(raw)
+    assert cfg.tools.output_truncate_at == 9999
+    assert cfg.tools.powershell_default_timeout_s == 120
+
+
+def test_non_positive_tool_truncate_rejected() -> None:
+    raw = _minimal_raw()
+    raw["tools"] = {"output_truncate_at": 0}
+    with pytest.raises(ConfigError, match="output_truncate_at"):
+        build_config(raw)
+
+
+def test_default_audit_rotation_settings() -> None:
+    cfg = build_config(_minimal_raw())
+    assert cfg.logging.audit_max_bytes == 5 * 1024 * 1024
+    assert cfg.logging.audit_backup_count == 5
+
+
+def test_custom_audit_rotation_settings() -> None:
+    raw = _minimal_raw()
+    raw["logging"] = {"audit_max_bytes": 1024, "audit_backup_count": 0}
+    cfg = build_config(raw)
+    assert cfg.logging.audit_max_bytes == 1024
+    assert cfg.logging.audit_backup_count == 0
+
+
+def test_invalid_audit_max_bytes_rejected() -> None:
+    raw = _minimal_raw()
+    raw["logging"] = {"audit_max_bytes": 0}
+    with pytest.raises(ConfigError, match="audit_max_bytes"):
+        build_config(raw)
+
+
+def test_negative_audit_backup_count_rejected() -> None:
+    raw = _minimal_raw()
+    raw["logging"] = {"audit_backup_count": -1}
+    with pytest.raises(ConfigError, match="audit_backup_count"):
+        build_config(raw)
+
+
 def test_missing_discord_section_rejected() -> None:
     with pytest.raises(ConfigError, match="discord"):
         build_config({})

@@ -10,6 +10,8 @@ def _config(enabled: tuple[str, ...]) -> ToolsConfig:
         restrict_paths=False,
         allow_roots=(),
         enabled=enabled,
+        output_truncate_at=1500,
+        powershell_default_timeout_s=30,
     )
 
 

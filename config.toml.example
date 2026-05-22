@@ -12,6 +12,10 @@
 allowed_user_id    = 0
 allowed_channel_id = 0
 allowed_guild_id   = 0
+# Words that bypass the LLM entirely. stop_command is exact-match (case
+# sensitive); ping_command is case-insensitive. They must differ.
+stop_command = "!stop"
+ping_command = "ping"
 
 # ---------------------------------------------------------------------------
 # Claude model + agent behavior.
@@ -78,9 +82,12 @@ enabled = [
 # Logging.
 # ---------------------------------------------------------------------------
 [logging]
-# Tool-invocation audit log. One JSON line per call. Rotates at 5 MB,
-# keeps 5 backups.
+# Tool-invocation audit log. One JSON line per call.
 audit_log_path = "audit.log"
+# Bytes per file before rotation (default 5 MiB).
+audit_max_bytes = 5242880
+# Number of rotated files to keep (audit.log.1, audit.log.2, ...).
+audit_backup_count = 5
 
 # Python logging level for the bot itself: DEBUG / INFO / WARNING / ERROR.
 level = "INFO"

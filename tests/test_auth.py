@@ -7,6 +7,8 @@ CFG = DiscordConfig(
     allowed_user_id=111,
     allowed_channel_id=222,
     allowed_guild_id=333,
+    stop_command="!stop",
+    ping_command="ping",
 )
 
 

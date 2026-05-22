@@ -11,9 +11,21 @@ from typing import Any
 
 import pytest
 
+from discord_claude_control.config import ToolsConfig
 from discord_claude_control.tools.input import build_input_tools
 from discord_claude_control.tools.process import build_process_tools
 from discord_claude_control.tools.shell import build_shell_tool
+
+
+def _tools_config() -> ToolsConfig:
+    return ToolsConfig(
+        input_auth_mode="autonomous",
+        restrict_paths=False,
+        allow_roots=(),
+        enabled=(),
+        output_truncate_at=1500,
+        powershell_default_timeout_s=30,
+    )
 
 
 async def _call(t: Any, args: dict[str, Any]) -> Any:
@@ -22,13 +34,13 @@ async def _call(t: Any, args: dict[str, Any]) -> Any:
 
 @pytest.mark.asyncio
 async def test_shell_rejects_empty_command() -> None:
-    result = await _call(build_shell_tool(), {"command": ""})
+    result = await _call(build_shell_tool(_tools_config()), {"command": ""})
     assert result.get("is_error") is True
 
 
 @pytest.mark.asyncio
 async def test_shell_rejects_bad_timeout() -> None:
-    result = await _call(build_shell_tool(), {"command": "echo hi", "timeout_s": -1})
+    result = await _call(build_shell_tool(_tools_config()), {"command": "echo hi", "timeout_s": -1})
     assert result.get("is_error") is True
 
 

@@ -59,7 +59,7 @@ def build_tools(
     registered: dict[str, SdkMcpTool[Any]] = {}
 
     if "run_powershell" in enabled:
-        registered["run_powershell"] = build_shell_tool()
+        registered["run_powershell"] = build_shell_tool(config)
 
     file_tools = build_file_tools(config)
     for name in ("read_file", "write_file", "list_dir"):

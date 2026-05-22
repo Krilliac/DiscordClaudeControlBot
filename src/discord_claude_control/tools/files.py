@@ -62,6 +62,7 @@ _LIST_SCHEMA: dict[str, Any] = {
 def build_file_tools(config: ToolsConfig) -> dict[str, SdkMcpTool[Any]]:
     restrict = config.restrict_paths
     roots = config.allow_roots
+    truncate_at = config.output_truncate_at
 
     async def _read_file(args: dict[str, Any]) -> dict[str, Any]:
         path = args.get("path")
@@ -85,7 +86,7 @@ def build_file_tools(config: ToolsConfig) -> dict[str, SdkMcpTool[Any]]:
             return error_result(f"read failed: {e}")
         try:
             text = data.decode("utf-8")
-            return text_result(truncate_output(text))
+            return text_result(truncate_output(text, truncate_at))
         except UnicodeDecodeError:
             preview = data[:200].hex()
             return text_result(f"<binary, {len(data)} bytes>\nhex(first 200): {preview}")
@@ -142,7 +143,7 @@ def build_file_tools(config: ToolsConfig) -> dict[str, SdkMcpTool[Any]]:
                         lines.append(f"     ?     {child.name}")
         except OSError as e:
             return error_result(f"list failed: {e}")
-        return text_result(truncate_output("\n".join(lines)))
+        return text_result(truncate_output("\n".join(lines), truncate_at))
 
     return {
         "read_file": tool("read_file", _READ_DESC, _READ_SCHEMA)(_read_file),

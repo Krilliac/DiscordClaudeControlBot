@@ -20,7 +20,12 @@ from typing import Any
 _LOGGER_NAME = "discord_claude_control.audit"
 
 
-def setup_audit_logger(path: Path | str) -> logging.Logger:
+def setup_audit_logger(
+    path: Path | str,
+    *,
+    max_bytes: int = 5 * 1024 * 1024,
+    backup_count: int = 5,
+) -> logging.Logger:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(_LOGGER_NAME)
@@ -32,8 +37,8 @@ def setup_audit_logger(path: Path | str) -> logging.Logger:
     if not already:
         handler = logging.handlers.RotatingFileHandler(
             target,
-            maxBytes=5 * 1024 * 1024,
-            backupCount=5,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
             encoding="utf-8",
         )
         handler.setFormatter(logging.Formatter("%(message)s"))

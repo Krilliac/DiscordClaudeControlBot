@@ -15,6 +15,8 @@ def _tools_config(restrict_paths: bool = False, allow_roots: tuple[str, ...] = (
         restrict_paths=restrict_paths,
         allow_roots=allow_roots,
         enabled=(),
+        output_truncate_at=1500,
+        powershell_default_timeout_s=30,
     )
 
 

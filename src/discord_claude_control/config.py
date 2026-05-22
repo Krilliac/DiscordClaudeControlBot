@@ -17,6 +17,8 @@ class DiscordConfig:
     allowed_user_id: int
     allowed_channel_id: int
     allowed_guild_id: int
+    stop_command: str
+    ping_command: str
 
 
 @dataclass(frozen=True)
@@ -39,12 +41,16 @@ class ToolsConfig:
     restrict_paths: bool
     allow_roots: tuple[str, ...]
     enabled: tuple[str, ...]
+    output_truncate_at: int
+    powershell_default_timeout_s: int
 
 
 @dataclass(frozen=True)
 class LoggingConfig:
     audit_log_path: str
     level: str
+    audit_max_bytes: int
+    audit_backup_count: int
 
 
 @dataclass(frozen=True)
@@ -112,10 +118,18 @@ def build_config(raw: dict[str, Any]) -> Config:
         allowed_user_id=_int(discord, "allowed_user_id"),
         allowed_channel_id=_int(discord, "allowed_channel_id"),
         allowed_guild_id=_int(discord, "allowed_guild_id"),
+        stop_command=_str(discord, "stop_command", default="!stop"),
+        ping_command=_str(discord, "ping_command", default="ping"),
     )
     for name in ("allowed_user_id", "allowed_channel_id", "allowed_guild_id"):
         if getattr(discord_cfg, name) <= 0:
             raise ConfigError(f"discord.{name} must be a positive Discord snowflake ID")
+    if not discord_cfg.stop_command.strip():
+        raise ConfigError("discord.stop_command must be non-empty")
+    if not discord_cfg.ping_command.strip():
+        raise ConfigError("discord.ping_command must be non-empty")
+    if discord_cfg.stop_command == discord_cfg.ping_command:
+        raise ConfigError("discord.stop_command and ping_command must differ")
 
     agent_cfg = AgentConfig(
         model=_str(agent, "model", default="claude-opus-4-7"),
@@ -146,12 +160,24 @@ def build_config(raw: dict[str, Any]) -> Config:
         restrict_paths=_bool(tools, "restrict_paths", default=False),
         allow_roots=tuple(_str_list(tools, "allow_roots", default=[])),
         enabled=tuple(_str_list(tools, "enabled", default=[])),
+        output_truncate_at=_int(tools, "output_truncate_at", default=1500),
+        powershell_default_timeout_s=_int(tools, "powershell_default_timeout_s", default=30),
     )
+    if tools_cfg.output_truncate_at <= 0:
+        raise ConfigError("tools.output_truncate_at must be > 0")
+    if tools_cfg.powershell_default_timeout_s <= 0:
+        raise ConfigError("tools.powershell_default_timeout_s must be > 0")
 
     logging_cfg = LoggingConfig(
         audit_log_path=_str(logging_, "audit_log_path", default="audit.log"),
         level=_str(logging_, "level", default="INFO").upper(),
+        audit_max_bytes=_int(logging_, "audit_max_bytes", default=5 * 1024 * 1024),
+        audit_backup_count=_int(logging_, "audit_backup_count", default=5),
     )
+    if logging_cfg.audit_max_bytes <= 0:
+        raise ConfigError("logging.audit_max_bytes must be > 0")
+    if logging_cfg.audit_backup_count < 0:
+        raise ConfigError("logging.audit_backup_count must be >= 0")
 
     attach_cfg = AttachConfig(
         enabled=_bool(attach, "enabled", default=False),

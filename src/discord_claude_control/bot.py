@@ -23,9 +23,6 @@ from .tools._context import reset_channel, set_channel
 
 log = logging.getLogger(__name__)
 
-STOP_COMMAND = "!stop"
-PING_COMMAND = "ping"
-
 
 class DispatchBot(discord.Client):
     def __init__(self, config: Config, secrets: Secrets) -> None:
@@ -59,7 +56,11 @@ class DispatchBot(discord.Client):
                 "authenticated via `claude /login` (subscription mode)"
             )
 
-        setup_audit_logger(self.config.logging.audit_log_path)
+        setup_audit_logger(
+            self.config.logging.audit_log_path,
+            max_bytes=self.config.logging.audit_max_bytes,
+            backup_count=self.config.logging.audit_backup_count,
+        )
         store = SessionIdStore(Path(self.config.agent.conversation_db_path))
         mcp_server, allowed_tools = build_tools(self.config.tools)
         self._agent = AgentSession(
@@ -131,11 +132,11 @@ class DispatchBot(discord.Client):
             )
             return
 
-        if message.content == STOP_COMMAND:
+        if message.content == self.config.discord.stop_command:
             await self._handle_stop(message)
             return
 
-        if message.content.strip().lower() == PING_COMMAND:
+        if message.content.strip().lower() == self.config.discord.ping_command.lower():
             await message.channel.send("pong")
             return
 
