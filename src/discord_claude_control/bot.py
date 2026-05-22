@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 import discord
@@ -14,6 +15,7 @@ from .auth import is_authorized_message
 from .broker import AgentBroker
 from .config import AgentConfig, Config, Secrets
 from .discord_sink import DiscordResponseSink
+from .health import format_status, run_heartbeat_loop
 from .power import PowerRequest
 from .session import SessionState
 from .session_persist import SessionIdStore
@@ -39,7 +41,10 @@ class DispatchBot(discord.Client):
         self._session: SessionState | None = None
         self._session_stop: asyncio.Event | None = None
         self._session_task: asyncio.Task[None] | None = None
+        self._heartbeat_stop: asyncio.Event | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._finalize_tasks: set[asyncio.Task[None]] = set()
+        self._started_at: float = time.time()
 
     async def setup_hook(self) -> None:
         # The Claude Code CLI (which the SDK spawns) reads ANTHROPIC_API_KEY
@@ -84,6 +89,13 @@ class DispatchBot(discord.Client):
         session = self._session
         self._broker.add_activity_listener(lambda reason: session.ping(reason))
 
+        # Liveness heartbeat: a separate coroutine that touches logs/heartbeat
+        # on a steady cadence. Independent of session activity so a wedged
+        # event loop is visible to the external watchdog even when nothing
+        # is being dispatched.
+        self._heartbeat_stop = asyncio.Event()
+        self._heartbeat_task = asyncio.create_task(run_heartbeat_loop(self._heartbeat_stop))
+
         if self.config.attach.enabled:
             self._attach = AttachServer(
                 self._broker, self.config.attach.host, self.config.attach.port
@@ -97,6 +109,14 @@ class DispatchBot(discord.Client):
             except Exception:
                 log.exception("attach server stop raised")
             self._attach = None
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
+        if self._heartbeat_task is not None:
+            try:
+                await self._heartbeat_task
+            except Exception:
+                log.exception("heartbeat loop crashed on shutdown")
+            self._heartbeat_task = None
         if self._session_stop is not None:
             self._session_stop.set()
         if self._session_task is not None:
@@ -119,6 +139,24 @@ class DispatchBot(discord.Client):
         if user is not None:
             log.info("connected as %s (id=%s)", user, user.id)
 
+    async def on_connect(self) -> None:
+        # Fired before identify completes. Useful to know the WebSocket
+        # link is back even when on_ready is delayed by guild fill.
+        log.info("gateway connected")
+
+    async def on_disconnect(self) -> None:
+        # discord.py reconnects automatically; this just makes the gap
+        # visible in logs/stderr.log instead of being silent.
+        log.warning("gateway disconnected")
+
+    async def on_resumed(self) -> None:
+        log.info("gateway session resumed")
+
+    async def on_error(self, event_method: str, /, *args: object, **kwargs: object) -> None:
+        # Default handler prints to stderr without a traceback header.
+        # We want a clearly-tagged log line so the cause is greppable.
+        log.exception("unhandled exception in event handler %s", event_method)
+
     async def on_message(self, message: discord.Message) -> None:
         self_user = self.user
         if self_user is not None and message.author.id == self_user.id:
@@ -132,12 +170,17 @@ class DispatchBot(discord.Client):
             )
             return
 
-        if message.content == self.config.discord.stop_command:
+        content = message.content
+        if content == self.config.discord.stop_command:
             await self._handle_stop(message)
             return
 
-        if message.content.strip().lower() == self.config.discord.ping_command.lower():
+        if content.strip().lower() == self.config.discord.ping_command.lower():
             await message.channel.send("pong")
+            return
+
+        if content.strip() == self.config.discord.status_command:
+            await self._handle_status(message)
             return
 
         await self._dispatch_to_agent(message)
@@ -149,6 +192,24 @@ class DispatchBot(discord.Client):
             return
         await self._broker.interrupt()
         await message.channel.send("stopped.")
+
+    async def _handle_status(self, message: discord.Message) -> None:
+        """Cheap liveness check that does NOT engage the agent."""
+        broker_busy = bool(self._broker is not None and self._broker.is_busy)
+        agent_connected = self._agent is not None
+        session = self._session
+        session_active = bool(session is not None and session.is_active)
+        seconds_until_idle = session.seconds_until_idle if session is not None else None
+        attach_clients = self._attach.client_count if self._attach is not None else None
+        text = format_status(
+            started_at=self._started_at,
+            agent_connected=agent_connected,
+            broker_busy=broker_busy,
+            attach_clients=attach_clients,
+            session_active=session_active,
+            seconds_until_idle=seconds_until_idle,
+        )
+        await message.channel.send(f"```\n{text}\n```")
 
     async def _dispatch_to_agent(self, message: discord.Message) -> None:
         if self._broker is None:

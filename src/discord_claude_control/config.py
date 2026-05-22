@@ -19,6 +19,7 @@ class DiscordConfig:
     allowed_guild_id: int
     stop_command: str
     ping_command: str
+    status_command: str
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,13 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class AttachConfig:
+    enabled: bool
+    host: str
+    port: int
+
+
+@dataclass(frozen=True)
 class Config:
     discord: DiscordConfig
     agent: AgentConfig
@@ -71,13 +79,6 @@ class Secrets:
     @property
     def has_api_key(self) -> bool:
         return bool(self.anthropic_api_key)
-
-
-@dataclass(frozen=True)
-class AttachConfig:
-    enabled: bool
-    host: str
-    port: int
 
 
 class ConfigError(ValueError):
@@ -120,6 +121,7 @@ def build_config(raw: dict[str, Any]) -> Config:
         allowed_guild_id=_int(discord, "allowed_guild_id"),
         stop_command=_str(discord, "stop_command", default="!stop"),
         ping_command=_str(discord, "ping_command", default="ping"),
+        status_command=_str(discord, "status_command", default="!status"),
     )
     for name in ("allowed_user_id", "allowed_channel_id", "allowed_guild_id"):
         if getattr(discord_cfg, name) <= 0:
@@ -128,8 +130,13 @@ def build_config(raw: dict[str, Any]) -> Config:
         raise ConfigError("discord.stop_command must be non-empty")
     if not discord_cfg.ping_command.strip():
         raise ConfigError("discord.ping_command must be non-empty")
-    if discord_cfg.stop_command == discord_cfg.ping_command:
-        raise ConfigError("discord.stop_command and ping_command must differ")
+    if not discord_cfg.status_command.strip():
+        raise ConfigError("discord.status_command must be non-empty")
+    distinct = {discord_cfg.stop_command, discord_cfg.ping_command, discord_cfg.status_command}
+    if len(distinct) != 3:
+        raise ConfigError(
+            "discord.stop_command, ping_command, and status_command must all differ"
+        )
 
     agent_cfg = AgentConfig(
         model=_str(agent, "model", default="claude-opus-4-7"),
