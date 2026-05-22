@@ -43,3 +43,10 @@ enabled = [
 [logging]
 audit_log_path = "audit.log"
 level = "INFO"
+
+[attach]
+# Local-attach server: lets `python -m discord_claude_control.attach` talk to
+# the same Claude conversation the Discord channel is driving. Loopback only.
+enabled = false
+host = "127.0.0.1"
+port = 9876

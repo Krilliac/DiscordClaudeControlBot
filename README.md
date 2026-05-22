@@ -19,7 +19,42 @@ Built incrementally. Each step ends with a working, testable artifact.
 - [x] Step 5: tools (PowerShell, files, screenshot, input, processes)
 - [x] Step 6: idle/active session state machine
 - [x] Step 7: NSSM service install (scripts shipped; manual run required)
+- [x] Step 9 (post-redesign): broker + local attach socket + subscription-auth mode
 - [ ] Step 8: Modern Standby end-to-end validation (user-side, after install)
+
+## Auth modes
+
+Pick one (the bot doesn't care which):
+
+1. **API mode** -- put `ANTHROPIC_API_KEY=sk-ant-...` in `.env`. Pay per token.
+2. **Subscription mode** -- leave `ANTHROPIC_API_KEY` unset. Run `claude /login`
+   once on the PC (interactive browser flow). The bot's spawned Claude Code
+   uses your Pro/Max plan, no per-token API charges.
+
+The bot logs at startup which mode it's using.
+
+## Local attach (PC-side direct interaction)
+
+Enable in `config.toml`:
+
+```toml
+[attach]
+enabled = true
+host = "127.0.0.1"   # loopback only -- do not expose
+port = 9876
+```
+
+Then on the PC, while the service is running:
+
+```powershell
+python -m discord_claude_control.attach
+```
+
+This connects to the same Claude conversation Discord is driving. Anything
+you type in the attach terminal flows in as a user turn. Any responses
+(from your turn OR a Discord turn) stream back to all connected attach
+clients AND to Discord. Close the attach CLI to detach -- conversation
+keeps running.
 
 ## Prerequisites
 

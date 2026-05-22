@@ -8,8 +8,10 @@ from pathlib import Path
 import discord
 
 from .agent import AgentSession
+from .attach_server import AttachServer
 from .audit import setup_audit_logger
 from .auth import is_authorized_message
+from .broker import AgentBroker
 from .config import Config, Secrets
 from .discord_sink import DiscordResponseSink
 from .power import PowerRequest
@@ -35,15 +37,28 @@ class DispatchBot(discord.Client):
         self.config: Config = config
         self._secrets = secrets
         self._agent: AgentSession | None = None
-        self._inflight: asyncio.Task[None] | None = None
+        self._broker: AgentBroker | None = None
+        self._attach: AttachServer | None = None
         self._session: SessionState | None = None
         self._session_stop: asyncio.Event | None = None
         self._session_task: asyncio.Task[None] | None = None
+        self._finalize_tasks: set[asyncio.Task[None]] = set()
 
     async def setup_hook(self) -> None:
-        # The SDK spawns the Claude Code CLI, which reads ANTHROPIC_API_KEY
-        # from its environment. setdefault avoids stomping a real shell value.
-        os.environ.setdefault("ANTHROPIC_API_KEY", self._secrets.anthropic_api_key)
+        # The Claude Code CLI (which the SDK spawns) reads ANTHROPIC_API_KEY
+        # from its environment if set. If not set, it falls back to whatever
+        # auth `claude /login` configured (subscription Pro/Max). Either way
+        # works; setdefault avoids stomping a real shell value if one is
+        # present in os.environ.
+        if self._secrets.anthropic_api_key:
+            os.environ.setdefault("ANTHROPIC_API_KEY", self._secrets.anthropic_api_key)
+            log.info("authenticating via ANTHROPIC_API_KEY (pay-per-token)")
+        else:
+            log.info(
+                "no ANTHROPIC_API_KEY set; expecting Claude Code to be "
+                "authenticated via `claude /login` (subscription mode)"
+            )
+
         setup_audit_logger(self.config.logging.audit_log_path)
         store = SessionIdStore(Path(self.config.agent.conversation_db_path))
         mcp_server, allowed_tools = build_tools(self.config.tools)
@@ -64,7 +79,23 @@ class DispatchBot(discord.Client):
         self._session_stop = asyncio.Event()
         self._session_task = asyncio.create_task(self._session.run_idle_loop(self._session_stop))
 
+        self._broker = AgentBroker(self._agent)
+        session = self._session
+        self._broker.add_activity_listener(lambda reason: session.ping(reason))
+
+        if self.config.attach.enabled:
+            self._attach = AttachServer(
+                self._broker, self.config.attach.host, self.config.attach.port
+            )
+            await self._attach.start()
+
     async def close(self) -> None:
+        if self._attach is not None:
+            try:
+                await self._attach.stop()
+            except Exception:
+                log.exception("attach server stop raised")
+            self._attach = None
         if self._session_stop is not None:
             self._session_stop.set()
         if self._session_task is not None:
@@ -100,13 +131,10 @@ class DispatchBot(discord.Client):
             )
             return
 
-        # !stop is matched verbatim before anything else so a wedged agent
-        # can always be killed.
         if message.content == STOP_COMMAND:
             await self._handle_stop(message)
             return
 
-        # Cheap liveness check; does not spend tokens.
         if message.content.strip().lower() == PING_COMMAND:
             await message.channel.send("pong")
             return
@@ -115,51 +143,50 @@ class DispatchBot(discord.Client):
 
     async def _handle_stop(self, message: discord.Message) -> None:
         log.info("!stop received from user=%s", message.author.id)
-        if self._inflight is None or self._inflight.done():
+        if self._broker is None or not self._broker.is_busy:
             await message.channel.send("nothing in flight.")
             return
-        if self._agent is not None:
-            try:
-                await self._agent.interrupt()
-            except Exception:
-                log.exception("agent.interrupt raised; cancelling task anyway")
-        self._inflight.cancel()
+        await self._broker.interrupt()
         await message.channel.send("stopped.")
 
     async def _dispatch_to_agent(self, message: discord.Message) -> None:
-        if self._agent is None:
-            log.error("agent not initialized")
+        if self._broker is None:
+            log.error("broker not initialized")
             await message.channel.send(":x: agent not ready; retry shortly")
             return
-        if self._inflight is not None and not self._inflight.done():
+        if self._broker.is_busy:
             await message.channel.send(
                 ":hourglass: still working on the previous message; use `!stop` to abort"
             )
             return
 
-        if self._session is not None:
-            self._session.ping("user message")
-
         sink = DiscordResponseSink(message.channel)
-        agent = self._agent
-        session = self._session
+        token = set_channel(message.channel)
 
-        async def _run() -> None:
-            token = set_channel(message.channel)
+        async def _finalize() -> None:
+            inflight = self._broker.inflight if self._broker else None
+            if inflight is None:
+                return
             try:
-                async with message.channel.typing():
-                    await agent.submit(message.content, sink)
+                await inflight
             except asyncio.CancelledError:
-                log.info("agent task cancelled by !stop")
-                raise
+                pass
             except Exception:
-                log.exception("agent task crashed")
+                log.exception("agent turn raised")
             finally:
                 reset_channel(token)
-                if session is not None:
-                    session.ping("turn complete")
 
-        self._inflight = asyncio.create_task(_run())
+        async with message.channel.typing():
+            ok = self._broker.submit_nowait(message.content, "discord", extra_sinks=[sink])
+            if not ok:
+                await message.channel.send(
+                    ":hourglass: still working on the previous message; use `!stop` to abort"
+                )
+                reset_channel(token)
+                return
+            task = asyncio.create_task(_finalize())
+            self._finalize_tasks.add(task)
+            task.add_done_callback(self._finalize_tasks.discard)
 
 
 def run_bot(config: Config, secrets: Secrets) -> None:

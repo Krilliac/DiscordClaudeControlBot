@@ -36,10 +36,31 @@ copy config.toml.example config.toml
 
 Edit:
 
-- `.env`            : fill in `ANTHROPIC_API_KEY` and `DISCORD_BOT_TOKEN`.
+- `.env`            : fill in `DISCORD_BOT_TOKEN`. `ANTHROPIC_API_KEY` is
+  optional -- leave it commented to use your Claude Pro/Max subscription
+  instead (see step 1b).
 - `config.toml`     : set `allowed_user_id`, `allowed_channel_id`,
   `allowed_guild_id` to your real Discord IDs (Developer Mode -> right
-  click -> Copy ID).
+  click -> Copy ID). If you want local attach, also set
+  `attach.enabled = true`.
+
+## 1b. Choose auth mode (one of these)
+
+**Subscription mode (no API cost):** run once,
+```powershell
+claude /login
+```
+Pick your Claude Pro/Max account in the browser. From then on the bot's
+Claude Code child process uses that auth. Leave `ANTHROPIC_API_KEY` empty.
+
+**API mode (pay-per-token):** put `ANTHROPIC_API_KEY=sk-ant-...` into
+`.env`. No `claude /login` needed.
+
+The startup logs say which mode is active:
+```
+authenticating via ANTHROPIC_API_KEY (pay-per-token)
+no ANTHROPIC_API_KEY set; expecting Claude Code to be authenticated via `claude /login` (subscription mode)
+```
 
 In the Discord Developer Portal for your bot, **enable the Message
 Content Intent**. The bot will silently never see messages without it.
@@ -148,6 +169,28 @@ adapter's power-savings settings. Try:
   Management).
 - Re-confirm `powercfg /a` lists S0 Low Power Idle.
 
+## 4b. Local attach (optional)
+
+If you set `attach.enabled = true` in `config.toml`, with the service
+running:
+
+```powershell
+python -m discord_claude_control.attach
+```
+
+You're now another window onto the same conversation Discord is using.
+Type a message + Enter to send. `!stop` interrupts. Ctrl-C detaches
+without killing anything.
+
+Test it: in Discord, send `say hi`. The reply should stream into both
+Discord AND your attach terminal. Then from the attach terminal type
+`now repeat that backwards`. Both Discord and the attach terminal should
+see your input echo (prefixed `>>> [attach]`) and the response.
+
+If `python -m discord_claude_control.attach` fails with `connect failed:
+[WinError 10061]`, double-check `attach.enabled = true` in your
+`config.toml` and that you restarted the service after editing.
+
 ## 5. Audit log spot-check
 
 After a few tool calls, look at `audit.log` (default in the repo root):
@@ -171,5 +214,9 @@ Each line is one JSON entry with `ts`, `tool`, `args`, `is_error`, and
 - The `truncated, full output saved to X` hard-file-spill behavior on
   PowerShell output is replaced by inline truncation markers. If you
   want the full-file dump back, it's a small follow-up.
+- The attach socket is loopback-only with no authentication. Anyone
+  with a local user session on the PC could connect. That's the same
+  trust boundary as the desktop itself -- fine for single-user, would
+  need an auth handshake for multi-user / shared machines.
 
 None of these block the core workflow.

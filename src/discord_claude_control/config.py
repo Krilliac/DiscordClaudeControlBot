@@ -52,12 +52,24 @@ class Config:
     session: SessionConfig
     tools: ToolsConfig
     logging: LoggingConfig
+    attach: AttachConfig
 
 
 @dataclass(frozen=True)
 class Secrets:
-    anthropic_api_key: str
+    anthropic_api_key: str | None
     discord_bot_token: str
+
+    @property
+    def has_api_key(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+
+@dataclass(frozen=True)
+class AttachConfig:
+    enabled: bool
+    host: str
+    port: int
 
 
 class ConfigError(ValueError):
@@ -76,9 +88,14 @@ def load_config(config_path: Path | str = "config.toml") -> Config:
 def load_secrets() -> Secrets:
     load_dotenv()
     return Secrets(
-        anthropic_api_key=_require_env("ANTHROPIC_API_KEY"),
+        anthropic_api_key=_optional_env("ANTHROPIC_API_KEY"),
         discord_bot_token=_require_env("DISCORD_BOT_TOKEN"),
     )
+
+
+def _optional_env(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value if value else None
 
 
 def build_config(raw: dict[str, Any]) -> Config:
@@ -87,6 +104,7 @@ def build_config(raw: dict[str, Any]) -> Config:
     session = _section(raw, "session")
     tools = _section(raw, "tools")
     logging_ = _section(raw, "logging")
+    attach = _section(raw, "attach")
 
     discord_cfg = DiscordConfig(
         allowed_user_id=_int(discord, "allowed_user_id"),
@@ -129,12 +147,21 @@ def build_config(raw: dict[str, Any]) -> Config:
         level=_str(logging_, "level", default="INFO").upper(),
     )
 
+    attach_cfg = AttachConfig(
+        enabled=_bool(attach, "enabled", default=False),
+        host=_str(attach, "host", default="127.0.0.1"),
+        port=_int(attach, "port", default=9876),
+    )
+    if attach_cfg.enabled and not (1 <= attach_cfg.port <= 65535):
+        raise ConfigError("attach.port must be in [1, 65535]")
+
     return Config(
         discord=discord_cfg,
         agent=agent_cfg,
         session=session_cfg,
         tools=tools_cfg,
         logging=logging_cfg,
+        attach=attach_cfg,
     )
 
 
