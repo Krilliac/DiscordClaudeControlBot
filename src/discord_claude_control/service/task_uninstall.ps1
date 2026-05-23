@@ -27,6 +27,20 @@ if (-not $task) {
 Write-Host "Stopping task '$taskFolder\$TaskName' (if running)..."
 try { Stop-ScheduledTask -TaskPath "$taskFolder\" -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
 
+# Stop-ScheduledTask does not kill child python.exe that have orphaned
+# from their cmd.exe wrapper. Sweep them explicitly so uninstall really
+# leaves no running bot behind.
+$orphans = @(
+    Get-CimInstance -ClassName Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*discord_claude_control*' }
+)
+foreach ($p in $orphans) {
+    try {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+        Write-Host ("  killed orphan PID {0}" -f $p.ProcessId)
+    } catch {}
+}
+
 Write-Host "Unregistering task..."
 Unregister-ScheduledTask -TaskPath "$taskFolder\" -TaskName $TaskName -Confirm:$false
 
