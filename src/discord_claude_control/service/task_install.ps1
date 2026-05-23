@@ -118,6 +118,21 @@ $settings  = New-ScheduledTaskSettingsSet `
 $existing = Get-ScheduledTask -TaskPath "$taskFolder\" -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Existing task found; removing first..."
+    # Kill orphan bot processes before unregister -- Stop-ScheduledTask
+    # does not reach python.exe that have detached from their cmd.exe
+    # wrapper. If they survive, the new bot we are about to start
+    # collides on the Discord gateway slot.
+    $orphans = @(
+        Get-CimInstance -ClassName Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like '*discord_claude_control*' }
+    )
+    foreach ($p in $orphans) {
+        try {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+            Write-Host ("  killed pre-existing PID {0}" -f $p.ProcessId)
+        } catch {}
+    }
+    if ($orphans.Count -gt 0) { Start-Sleep -Seconds 3 }
     Unregister-ScheduledTask -TaskPath "$taskFolder\" -TaskName $TaskName -Confirm:$false
 }
 

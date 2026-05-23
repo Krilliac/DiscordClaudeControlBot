@@ -9,6 +9,7 @@ CFG = DiscordConfig(
     allowed_guild_id=333,
     stop_command="!stop",
     ping_command="ping",
+    status_command="!status",
 )
 
 

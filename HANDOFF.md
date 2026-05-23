@@ -137,6 +137,25 @@ Get-Content logs\stderr.log -Tail 10
 You should see `connected as <bot>#... (id=...)` near the bottom. Then
 re-test the smoke checklist from step 1.
 
+Restart (after a code change or config edit):
+
+```powershell
+.\src\discord_claude_control\service\task_restart.ps1
+```
+
+Do NOT do `Stop-ScheduledTask` + `Start-ScheduledTask` by hand. If a
+prior python.exe has orphaned from its cmd.exe wrapper (cmd died,
+python kept going as a child of services.exe),
+`Stop-ScheduledTask` leaves it alive -- the new bot you then start
+loses the Discord gateway-slot race against the orphan and exits
+code 1, while the orphan keeps serving stale code as if nothing
+happened. `task_restart.ps1` finds every python.exe whose
+CommandLine references `discord_claude_control`, kills them, waits
+for Discord to release the gateway slot, then starts the task and
+polls `logs\heartbeat` to confirm the new bot is actually live.
+`task_install.ps1` and `task_uninstall.ps1` apply the same kill
+sweep before touching the task registration.
+
 Uninstall:
 
 ```powershell
