@@ -13,7 +13,13 @@ from typing import Any
 from claude_agent_sdk import SdkMcpTool, tool
 
 from ..config import ToolsConfig
-from ._helpers import check_path_allowed, error_result, text_result, truncate_output
+from ._helpers import (
+    check_path_allowed,
+    error_result,
+    safe_filename,
+    spill_if_large,
+    text_result,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +92,12 @@ def build_file_tools(config: ToolsConfig) -> dict[str, SdkMcpTool[Any]]:
             return error_result(f"read failed: {e}")
         try:
             text = data.decode("utf-8")
-            return text_result(truncate_output(text, truncate_at))
+            rendered = await spill_if_large(
+                text,
+                threshold=truncate_at,
+                filename=safe_filename(p.stem or p.name, ext=p.suffix or ".txt"),
+            )
+            return text_result(rendered)
         except UnicodeDecodeError:
             preview = data[:200].hex()
             return text_result(f"<binary, {len(data)} bytes>\nhex(first 200): {preview}")
@@ -143,7 +154,13 @@ def build_file_tools(config: ToolsConfig) -> dict[str, SdkMcpTool[Any]]:
                         lines.append(f"     ?     {child.name}")
         except OSError as e:
             return error_result(f"list failed: {e}")
-        return text_result(truncate_output("\n".join(lines), truncate_at))
+        joined = "\n".join(lines)
+        rendered = await spill_if_large(
+            joined,
+            threshold=truncate_at,
+            filename=safe_filename(f"listing-{p.name or 'root'}"),
+        )
+        return text_result(rendered)
 
     return {
         "read_file": tool("read_file", _READ_DESC, _READ_SCHEMA)(_read_file),

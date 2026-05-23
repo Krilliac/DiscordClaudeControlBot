@@ -23,11 +23,11 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
-from .agent import ResponseSink, TurnResult
+from .agent import ResponseSink, TurnResult, UserTurn
 
 
 class _AgentLike(Protocol):
-    async def submit(self, prompt: str, sink: ResponseSink) -> None: ...
+    async def submit(self, prompt: "str | UserTurn", sink: ResponseSink) -> None: ...
     async def interrupt(self) -> None: ...
 
 
@@ -89,7 +89,7 @@ class AgentBroker:
 
     def submit_nowait(
         self,
-        prompt: str,
+        prompt: "str | UserTurn",
         source_label: str,
         *,
         extra_sinks: Sequence[ResponseSink] = (),
@@ -100,7 +100,11 @@ class AgentBroker:
             log.info("rejected concurrent submit from %s", source_label)
             return False
 
-        self._notify_input(source_label, prompt)
+        # Input listeners (attach mirrors) only care about the text portion;
+        # image attachments are a Discord-only embellishment that doesn't
+        # echo cleanly to a terminal.
+        text_for_listeners = prompt if isinstance(prompt, str) else prompt.text
+        self._notify_input(source_label, text_for_listeners)
         self._notify_activity(f"input from {source_label}")
 
         self._inflight = asyncio.create_task(
@@ -123,7 +127,7 @@ class AgentBroker:
 
     async def _run_turn(
         self,
-        prompt: str,
+        prompt: "str | UserTurn",
         source_label: str,
         extra_sinks: list[ResponseSink],
     ) -> None:

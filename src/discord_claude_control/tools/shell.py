@@ -10,7 +10,7 @@ from typing import Any
 from claude_agent_sdk import SdkMcpTool, tool
 
 from ..config import ToolsConfig
-from ._helpers import error_result, text_result, truncate_output
+from ._helpers import error_result, spill_if_large, text_result
 
 log = logging.getLogger(__name__)
 
@@ -80,10 +80,16 @@ def build_shell_tool(tools_config: ToolsConfig) -> SdkMcpTool[Any]:
         stderr = stderr_b.decode("utf-8", errors="replace")
         exit_code = proc.returncode if proc.returncode is not None else -1
 
+        stdout_rendered = await spill_if_large(
+            stdout, threshold=truncate_at, filename="powershell-stdout.txt"
+        )
+        stderr_rendered = await spill_if_large(
+            stderr, threshold=truncate_at, filename="powershell-stderr.txt"
+        )
         body = (
             f"exit_code: {exit_code}\n"
-            f"--- stdout ---\n{truncate_output(stdout, truncate_at)}\n"
-            f"--- stderr ---\n{truncate_output(stderr, truncate_at)}"
+            f"--- stdout ---\n{stdout_rendered}\n"
+            f"--- stderr ---\n{stderr_rendered}"
         )
         return text_result(body)
 
