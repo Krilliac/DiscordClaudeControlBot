@@ -73,7 +73,12 @@ if (-not (Test-Path $RepoPath)) { throw "RepoPath not found: $RepoPath" }
 $RepoPath = (Resolve-Path $RepoPath).Path
 
 if (-not $PythonExe) {
-    $PythonExe = Join-Path $RepoPath '.venv\Scripts\python.exe'
+    # Default to pythonw.exe so the task runs WITHOUT a visible console
+    # window. The bot redirects sys.stdout/stderr to logs/stdout.log and
+    # logs/stderr.log itself (see _log_setup.py); we don't need cmd.exe
+    # to do that for us. Avoids the "blank terminal someone closes by
+    # accident, killing the task" failure mode.
+    $PythonExe = Join-Path $RepoPath '.venv\Scripts\pythonw.exe'
 }
 if (-not (Test-Path $PythonExe)) {
     throw "Python not found at $PythonExe. Create the venv first (python -m venv .venv) or pass -PythonExe."
@@ -96,12 +101,11 @@ Write-Host "  RepoPath : $RepoPath"
 Write-Host "  LogDir   : $LogDir"
 Write-Host ""
 
-# Wrap the python invocation in cmd.exe so we can redirect stdout/stderr to
-# log files. ScheduledTaskAction by itself does not support I/O redirection.
-$stdoutLog = Join-Path $LogDir 'stdout.log'
-$stderrLog = Join-Path $LogDir 'stderr.log'
-$cmdArgs   = "/d /c `"`"$PythonExe`" -m discord_claude_control >> `"$stdoutLog`" 2>> `"$stderrLog`"`""
-$action    = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArgs -WorkingDirectory $RepoPath
+# Direct pythonw.exe invocation -- no cmd.exe wrapper, no visible window.
+# The bot redirects its own stdout/stderr to logs/stdout.log and stderr.log
+# via _log_setup.redirect_logs_to_files (called at the very top of
+# __main__.py before any other import).
+$action = New-ScheduledTaskAction -Execute $PythonExe -Argument '-m discord_claude_control' -WorkingDirectory $RepoPath
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $settings  = New-ScheduledTaskSettingsSet `
