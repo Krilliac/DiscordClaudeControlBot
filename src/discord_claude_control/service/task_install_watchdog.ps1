@@ -68,7 +68,9 @@ if (-not (Test-Path $RepoPath)) { throw "RepoPath not found: $RepoPath" }
 $RepoPath = (Resolve-Path $RepoPath).Path
 
 if (-not $PythonExe) {
-    $PythonExe = Join-Path $RepoPath '.venv\Scripts\python.exe'
+    # pythonw.exe = windowless; watchdog.main() redirects its own stdout/
+    # stderr to logs/watchdog-stdout.log and logs/watchdog-stderr.log.
+    $PythonExe = Join-Path $RepoPath '.venv\Scripts\pythonw.exe'
 }
 if (-not (Test-Path $PythonExe)) {
     throw "Python not found at $PythonExe. Create the venv first or pass -PythonExe."
@@ -108,20 +110,18 @@ if (-not $webhookConfigured) {
     Write-Warning "The watchdog will exit immediately on start until you add it."
 }
 
-$stdoutLog = Join-Path $LogDir 'watchdog-stdout.log'
-$stderrLog = Join-Path $LogDir 'watchdog-stderr.log'
-
-# Build the args once so the cmd.exe quoting is readable.
+# Direct pythonw.exe invocation -- no cmd.exe wrapper, no visible window.
+# Output goes to watchdog-stdout.log / watchdog-stderr.log via
+# _log_setup.redirect_logs_to_files at the top of watchdog.main().
 $pyArgs = @(
-    "-m discord_claude_control.watchdog"
-    "--heartbeat-path `"$($LogDir)\heartbeat`""
-    "--stale-seconds $StaleSeconds"
-    "--check-interval $CheckInterval"
-    "--alert-cooldown $AlertCooldown"
+    '-m', 'discord_claude_control.watchdog'
+    '--heartbeat-path', "$LogDir\heartbeat"
+    '--stale-seconds', "$StaleSeconds"
+    '--check-interval', "$CheckInterval"
+    '--alert-cooldown', "$AlertCooldown"
 ) -join ' '
 
-$cmdArgs = "/d /c `"`"$PythonExe`" $pyArgs >> `"$stdoutLog`" 2>> `"$stderrLog`"`""
-$action  = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArgs -WorkingDirectory $RepoPath
+$action = New-ScheduledTaskAction -Execute $PythonExe -Argument $pyArgs -WorkingDirectory $RepoPath
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
@@ -176,4 +176,4 @@ Get-ScheduledTask -TaskPath "$taskFolder\" -TaskName $TaskName |
 
 Write-Host ""
 Write-Host "Done. The watchdog starts at every user logon."
-Write-Host "Logs: $stdoutLog and $stderrLog"
+Write-Host "Logs: $LogDir\watchdog-stdout.log and $LogDir\watchdog-stderr.log"

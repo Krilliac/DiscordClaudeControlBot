@@ -255,6 +255,15 @@ def run_watchdog(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Redirect first, before logging.basicConfig wires up sys.stderr. Under
+    # pythonw.exe (Task Scheduler launch) the default streams are None and
+    # everything logging emits would vanish.
+    from ._log_setup import redirect_logs_to_files
+
+    redirect_logs_to_files(
+        stdout_path=Path("logs") / "watchdog-stdout.log",
+        stderr_path=Path("logs") / "watchdog-stderr.log",
+    )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
