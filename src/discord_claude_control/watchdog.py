@@ -20,11 +20,13 @@ or revoked (this has happened in practice), the bot cannot log in -- but
 the webhook still works, so the alert lands. Two independent failure
 domains ⇒ two independent credentials.
 
-Stdlib only
------------
-This module imports only stdlib so it stays runnable even when the bot's
-venv is broken. The webhook POST uses urllib.request; no `requests`,
-no aiohttp, no discord.py.
+Stdlib only (almost)
+--------------------
+The core (read_heartbeat_age, post_alert, run_watchdog) imports only
+stdlib so it stays runnable even when the bot's venv is broken. The
+webhook POST uses urllib.request; no `requests`, no aiohttp, no
+discord.py. main() additionally tries `python-dotenv` to read .env,
+but tolerates its absence (falls back to bare os.environ).
 
 CLI
 ---
@@ -289,6 +291,16 @@ def main(argv: list[str] | None = None) -> int:
         help="seconds before re-alerting on a continuing outage (default: 600)",
     )
     args = parser.parse_args(argv)
+
+    # Best-effort .env load so the user can configure ALERT_WEBHOOK_URL in
+    # the same .env file the bot reads. We tolerate python-dotenv being
+    # absent so the watchdog still runs from a minimal Python install.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        log.info("python-dotenv not installed; reading env from os.environ only")
 
     webhook = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
     if not webhook:
