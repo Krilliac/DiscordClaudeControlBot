@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 _current_channel: Any = None
+_current_bot: Any = None
 
 
 def set_channel(channel: Any) -> Any:
@@ -33,3 +34,14 @@ def reset_channel(token: Any) -> None:
 
 def get_channel() -> Any:
     return _current_channel
+
+
+def set_bot(bot: Any) -> None:
+    """Store the bot client so tools can call bot.wait_for(...) for reaction
+    confirmations. Set once at startup; never reset during a session."""
+    global _current_bot
+    _current_bot = bot
+
+
+def get_bot() -> Any:
+    return _current_bot

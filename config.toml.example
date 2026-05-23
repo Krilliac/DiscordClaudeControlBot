@@ -89,6 +89,11 @@ audit_max_bytes = 5242880
 # Number of rotated files to keep (audit.log.1, audit.log.2, ...).
 audit_backup_count = 5
 
+# Per-turn token + USD usage. One JSON line per Claude turn.
+# Read by `!cost` / `/cost`. Append-only, no rotation today (one line
+# is ~200 bytes; 10k turns = 2 MB).
+usage_log_path = "usage.log"
+
 # Python logging level for the bot itself: DEBUG / INFO / WARNING / ERROR.
 level = "INFO"
 

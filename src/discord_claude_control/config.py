@@ -49,6 +49,7 @@ class ToolsConfig:
 @dataclass(frozen=True)
 class LoggingConfig:
     audit_log_path: str
+    usage_log_path: str
     level: str
     audit_max_bytes: int
     audit_backup_count: int
@@ -177,6 +178,7 @@ def build_config(raw: dict[str, Any]) -> Config:
 
     logging_cfg = LoggingConfig(
         audit_log_path=_str(logging_, "audit_log_path", default="audit.log"),
+        usage_log_path=_str(logging_, "usage_log_path", default="usage.log"),
         level=_str(logging_, "level", default="INFO").upper(),
         audit_max_bytes=_int(logging_, "audit_max_bytes", default=5 * 1024 * 1024),
         audit_backup_count=_int(logging_, "audit_backup_count", default=5),
@@ -185,6 +187,8 @@ def build_config(raw: dict[str, Any]) -> Config:
         raise ConfigError("logging.audit_max_bytes must be > 0")
     if logging_cfg.audit_backup_count < 0:
         raise ConfigError("logging.audit_backup_count must be >= 0")
+    if not logging_cfg.usage_log_path.strip():
+        raise ConfigError("logging.usage_log_path must be non-empty")
 
     attach_cfg = AttachConfig(
         enabled=_bool(attach, "enabled", default=False),

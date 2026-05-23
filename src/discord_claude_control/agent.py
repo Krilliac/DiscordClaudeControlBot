@@ -14,10 +14,12 @@ real SDK or the Anthropic API.
 
 from __future__ import annotations
 
+import base64
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -30,6 +32,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
+from . import usage
 from .config import AgentConfig
 
 log = logging.getLogger(__name__)
@@ -43,6 +46,33 @@ class TurnResult:
     session_id: str
     total_cost_usd: float | None
     num_turns: int
+
+
+@dataclass(frozen=True)
+class ImageBlob:
+    """A single image to attach to a user turn."""
+
+    mime_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
+class UserTurn:
+    """A user turn that may include images alongside text.
+
+    str inputs (the common case, including attach terminals) are accepted
+    everywhere this is accepted via `from_any`. Only Discord messages with
+    image attachments construct this directly.
+    """
+
+    text: str
+    images: tuple[ImageBlob, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_any(cls, value: "str | UserTurn") -> "UserTurn":
+        if isinstance(value, UserTurn):
+            return value
+        return cls(text=value, images=())
 
 
 class ResponseSink(Protocol):
@@ -73,6 +103,7 @@ class AgentSession:
         allowed_tools: list[str] | None = None,
         *,
         client_factory: ClientFactory = _default_client_factory,
+        usage_log_path: Path | None = None,
     ) -> None:
         self._config = config
         self._store = session_store
@@ -82,6 +113,7 @@ class AgentSession:
         self._client_factory = client_factory
         self._client: ClaudeSDKClient | None = None
         self._current_session_id: str | None = None
+        self._usage_log_path = usage_log_path
 
     @property
     def is_connected(self) -> bool:
@@ -124,10 +156,14 @@ class AgentSession:
         finally:
             self._client = None
 
-    async def submit(self, prompt: str, sink: ResponseSink) -> None:
+    async def submit(self, prompt: "str | UserTurn", sink: ResponseSink) -> None:
         if self._client is None:
             raise RuntimeError("agent not connected; call connect() first")
-        await self._client.query(prompt)
+        turn = UserTurn.from_any(prompt)
+        if turn.images:
+            await self._client.query(_stream_multimodal(turn))
+        else:
+            await self._client.query(turn.text)
         try:
             async for msg in self._client.receive_response():
                 if isinstance(msg, AssistantMessage):
@@ -145,6 +181,15 @@ class AgentSession:
                     )
                     self._current_session_id = msg.session_id
                     self._store.save(msg.session_id)
+                    if self._usage_log_path is not None:
+                        usage.record_turn(
+                            self._usage_log_path,
+                            model=self._config.model,
+                            usage_dict=msg.usage,
+                            total_cost_usd=msg.total_cost_usd,
+                            duration_ms=msg.duration_ms,
+                            session_id=msg.session_id,
+                        )
                     await sink.commit(result)
                     return
                 elif isinstance(msg, SystemMessage):
@@ -158,3 +203,31 @@ class AgentSession:
     async def interrupt(self) -> None:
         if self._client is not None:
             await self._client.interrupt()
+
+
+async def _stream_multimodal(turn: UserTurn) -> AsyncIterator[dict[str, Any]]:
+    """Yield the single user-message dict the SDK's CLI bridge expects when
+    we want to attach images. Content blocks follow the Anthropic API shape:
+    {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
+    """
+    content: list[dict[str, Any]] = []
+    for img in turn.images:
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.mime_type,
+                    "data": base64.b64encode(img.data).decode("ascii"),
+                },
+            }
+        )
+    if turn.text:
+        content.append({"type": "text", "text": turn.text})
+    if not content:
+        content.append({"type": "text", "text": "(empty turn)"})
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+    }

@@ -273,18 +273,113 @@ Get-Content audit.log -Tail 20
 Each line is one JSON entry with `ts`, `tool`, `args`, `is_error`, and
 `result`. Rotation kicks in at 5 MB.
 
+## 5b. Usage log spot-check
+
+After a few agent turns, look at `usage.log`:
+
+```powershell
+Get-Content usage.log -Tail 5
+```
+
+One JSON line per Claude turn with token counts (input / output /
+cache create / cache read), `total_cost_usd`, duration, and session
+id. Read by the `!cost` / `/cost` command.
+
+## 6. Watchdog install (recommended)
+
+The watchdog is a second, independent process that reads
+`logs/heartbeat` and posts an alert + restarts the bot if the
+heartbeat goes stale. It uses a **separate Discord webhook URL**
+(not the bot's gateway token), so a bot-token reset does not
+silence the alerts.
+
+Set up the webhook:
+
+1. In Discord, pick your alerts channel.
+2. Channel settings -> Integrations -> Webhooks -> New Webhook.
+3. Copy the webhook URL.
+4. Add to `.env`:
+   ```
+   ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/.../...
+   ```
+
+Install:
+
+```powershell
+.\src\discord_claude_control\service\task_install_watchdog.ps1
+```
+
+The script registers the watchdog at user logon (separate Task
+Scheduler entry from the bot) and starts it. Logs land in
+`logs\watchdog-stdout.log` and `logs\watchdog-stderr.log`. Defaults:
+180s stale threshold, 60s poll interval, 600s alert cooldown.
+
+Tune via parameters, e.g.
+`task_install_watchdog.ps1 -StaleSeconds 120 -CheckInterval 30`.
+
+Smoke test (manually wedge the bot to verify alerting):
+
+```powershell
+# 1. Confirm watchdog is up.
+Get-Content logs\watchdog-stdout.log -Tail 5
+
+# 2. Stop the bot (NOT the watchdog).
+.\src\discord_claude_control\service\task_uninstall.ps1
+# Wait ~3 minutes (the stale threshold).
+
+# 3. Within ~1-3 minutes you should see an alert in your alerts channel.
+
+# 4. Reinstall the bot:
+.\src\discord_claude_control\service\task_install.ps1
+# The watchdog should post a "recovered" message on the next check.
+```
+
+## Command reference
+
+Anything not in this table becomes an LLM turn.
+
+| Message form     | Slash form    | Effect                                              |
+|------------------|---------------|-----------------------------------------------------|
+| `ping`           | -             | bot replies `pong` (no tokens)                      |
+| `!stop`          | `/stop`       | interrupt the current agent turn                    |
+| `!status`        | `/status`     | uptime, idle/active, attach clients                 |
+| `!help`          | `/help`       | list every command                                  |
+| `!help <name>`   | `/help <name>`| detail for one command                              |
+| `!cost`          | `/cost`       | today's token + USD usage                           |
+| `!cost week`     | `/cost week`  | last 7 days                                         |
+| `!cost month`    | `/cost month` | last 30 days                                        |
+| `!cost all`      | `/cost all`   | since usage.log started                             |
+| -                | `/screenshot` | grab a screenshot directly (no LLM, no tokens)      |
+
+Attach an image file to any Discord message and it gets sent to
+Claude as a vision input alongside your text.
+
+## Confirmations
+
+Set `input_auth_mode` in `config.toml`'s `[tools]` section:
+
+- `autonomous` (default): no prompts.
+- `confirm_destructive`: bot asks for ✅/❌ on `kill_process` and
+  `launch_app`. Tap ✅ within 30s to approve.
+- `confirm_all`: same prompt for every input/process tool
+  (`kill_process`, `launch_app`, `move_mouse`, `click`,
+  `type_text`, `press_key`).
+
+If the confirmation can't reach you (e.g. an attach-only turn with
+no live channel), the tool returns an error to the agent rather than
+running. Default-deny.
+
 ## Known gaps to address later
 
-- `input_auth_mode = "confirm_destructive"` and `"confirm_all"` are
-  config-recognized but not yet implemented; both currently behave like
-  `"autonomous"`. There's a warning log at startup.
+- Large outputs (PowerShell stdout/stderr > 1500 bytes, oversized
+  file reads, large `list_dir` results) now post the full bytes as a
+  Discord attachment and return a truncated head to the model. If
+  you want a different threshold, set `tools.output_truncate_at` in
+  `config.toml`.
 - Tool calls render in Discord only via the model's text response
-  (and screenshots as attachments). The "compact embed per tool call"
-  rendering in the original spec is a polish pass we can layer in later.
-- Confirmation prompts for `kill_process` / `launch_app` likewise.
-- The `truncated, full output saved to X` hard-file-spill behavior on
-  PowerShell output is replaced by inline truncation markers. If you
-  want the full-file dump back, it's a small follow-up.
+  (and screenshots / large outputs as attachments). The "compact
+  embed per tool call" rendering in the original spec is a polish
+  pass we can layer in later.
 - The attach socket is loopback-only with no authentication. Anyone
   with a local user session on the PC could connect. That's the same
   trust boundary as the desktop itself -- fine for single-user, would

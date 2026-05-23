@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import time
 from pathlib import Path
 
 import discord
+from discord import app_commands
 
-from .agent import AgentSession
+from .agent import AgentSession, ImageBlob, UserTurn
 from .attach_server import AttachServer
 from .audit import setup_audit_logger
-from .auth import is_authorized_message
+from .auth import is_authorized, is_authorized_message
 from .broker import AgentBroker
+from .commands import (
+    ResolvedCommand,
+    find_by_bang,
+    render_detail,
+    render_overview,
+    resolve,
+)
 from .config import AgentConfig, Config, Secrets
 from .discord_sink import DiscordResponseSink
 from .health import format_status, run_heartbeat_loop
@@ -21,7 +30,8 @@ from .session import SessionState
 from .session_persist import SessionIdStore
 from .system_prompt import DEFAULT_SYSTEM_PROMPT
 from .tools import build_tools
-from .tools._context import reset_channel, set_channel
+from .tools._context import reset_channel, set_bot, set_channel
+from . import usage
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +55,14 @@ class DispatchBot(discord.Client):
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._finalize_tasks: set[asyncio.Task[None]] = set()
         self._started_at: float = time.time()
+        self._commands: tuple[ResolvedCommand, ...] = resolve(
+            stop=config.discord.stop_command,
+            ping=config.discord.ping_command,
+            status=config.discord.status_command,
+        )
+        self._usage_log_path = Path(config.logging.usage_log_path)
+        self.tree = app_commands.CommandTree(self)
+        self._register_slash_handlers()
 
     async def setup_hook(self) -> None:
         # The Claude Code CLI (which the SDK spawns) reads ANTHROPIC_API_KEY
@@ -66,14 +84,22 @@ class DispatchBot(discord.Client):
             max_bytes=self.config.logging.audit_max_bytes,
             backup_count=self.config.logging.audit_backup_count,
         )
+        # Make the bot client visible to tools that need to wait_for a
+        # reaction (confirmation prompts). Set once; never reset.
+        set_bot(self)
+
         store = SessionIdStore(Path(self.config.agent.conversation_db_path))
-        mcp_server, allowed_tools = build_tools(self.config.tools)
+        mcp_server, allowed_tools = build_tools(
+            self.config.tools,
+            allowed_user_id=self.config.discord.allowed_user_id,
+        )
         self._agent = AgentSession(
             config=self.config.agent,
             session_store=store,
             system_prompt=_resolve_system_prompt(self.config.agent),
             mcp_server=mcp_server,
             allowed_tools=allowed_tools,
+            usage_log_path=self._usage_log_path,
         )
         await self._agent.connect()
 
@@ -101,6 +127,16 @@ class DispatchBot(discord.Client):
                 self._broker, self.config.attach.host, self.config.attach.port
             )
             await self._attach.start()
+
+        # Sync the slash command tree to the allowed guild. Guild-scoped
+        # commands appear immediately (vs. global commands which take up
+        # to an hour to propagate).
+        guild = discord.Object(id=self.config.discord.allowed_guild_id)
+        try:
+            synced = await self.tree.sync(guild=guild)
+            log.info("synced %d slash command(s) to guild %s", len(synced), guild.id)
+        except Exception:
+            log.exception("slash sync failed; / commands will not appear")
 
     async def close(self) -> None:
         if self._attach is not None:
@@ -170,31 +206,167 @@ class DispatchBot(discord.Client):
             )
             return
 
-        content = message.content
-        if content == self.config.discord.stop_command:
-            await self._handle_stop(message)
-            return
-
-        if content.strip().lower() == self.config.discord.ping_command.lower():
-            await message.channel.send("pong")
-            return
-
-        if content.strip() == self.config.discord.status_command:
-            await self._handle_status(message)
+        match = find_by_bang(message.content, self._commands)
+        if match is not None:
+            cmd, args = match
+            await self._run_bang_command(cmd.spec.name, message.channel, args)
             return
 
         await self._dispatch_to_agent(message)
 
-    async def _handle_stop(self, message: discord.Message) -> None:
-        log.info("!stop received from user=%s", message.author.id)
-        if self._broker is None or not self._broker.is_busy:
-            await message.channel.send("nothing in flight.")
-            return
-        await self._broker.interrupt()
-        await message.channel.send("stopped.")
+    # ----------------------------------------------------------------- #
+    # Slash command registration                                        #
+    # ----------------------------------------------------------------- #
 
-    async def _handle_status(self, message: discord.Message) -> None:
-        """Cheap liveness check that does NOT engage the agent."""
+    def _register_slash_handlers(self) -> None:
+        """Register a Discord application command for every spec with slash=True.
+
+        Auth is re-checked inside each callback against the configured
+        user/channel/guild. Guild-scoping limits *where* the command is
+        visible; channel + user gates limit *who* can run it.
+        """
+        guild = discord.Object(id=self.config.discord.allowed_guild_id)
+        for cmd in self._commands:
+            if not cmd.spec.slash:
+                continue
+            self._register_one_slash(cmd, guild)
+
+    def _register_one_slash(self, cmd: ResolvedCommand, guild: discord.Object) -> None:
+        name = cmd.spec.name
+        # Discord caps command description at 100 chars.
+        description = cmd.spec.summary[:100]
+
+        if cmd.spec.takes_args:
+            arg_description = "optional arguments (see /help <name>)"[:100]
+
+            @self.tree.command(name=name, description=description, guild=guild)
+            @app_commands.describe(args=arg_description)
+            async def _slash_with_args(
+                interaction: discord.Interaction, args: str = ""
+            ) -> None:
+                await self._run_slash_command(name, interaction, args)
+        else:
+
+            @self.tree.command(name=name, description=description, guild=guild)
+            async def _slash_no_args(interaction: discord.Interaction) -> None:
+                await self._run_slash_command(name, interaction, "")
+
+    async def _run_slash_command(
+        self, name: str, interaction: discord.Interaction, args: str
+    ) -> None:
+        guild_id = interaction.guild_id
+        channel = interaction.channel
+        channel_id = channel.id if channel is not None else 0
+        if not is_authorized(
+            user_id=interaction.user.id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            config=self.config.discord,
+        ):
+            log.debug(
+                "rejecting unauthorized slash /%s from user=%s channel=%s guild=%s",
+                name,
+                interaction.user.id,
+                channel_id,
+                guild_id,
+            )
+            try:
+                await interaction.response.send_message(
+                    "not authorized", ephemeral=True
+                )
+            except Exception:
+                log.debug("ephemeral auth-deny send failed", exc_info=True)
+            return
+
+        if name == "screenshot":
+            # Slow (capture + encode). Defer so Discord doesn't time out.
+            try:
+                await interaction.response.defer(thinking=True)
+            except Exception:
+                log.debug("defer failed for /screenshot", exc_info=True)
+            assert channel is not None  # auth gate ensures channel is the allowed one
+            await self._do_screenshot(channel)
+            try:
+                await interaction.followup.send("screenshot posted.", ephemeral=True)
+            except Exception:
+                log.debug("/screenshot followup ack failed", exc_info=True)
+            return
+
+        text = await self._invoke_text_command(name, args)
+        if text is None:
+            text = f"unknown command: {name}"
+        try:
+            await interaction.response.send_message(text)
+        except discord.InteractionResponded:
+            await interaction.followup.send(text)
+        except Exception:
+            log.exception("slash /%s response failed", name)
+
+    # ----------------------------------------------------------------- #
+    # Bang command dispatch                                             #
+    # ----------------------------------------------------------------- #
+
+    async def _run_bang_command(
+        self, name: str, channel: discord.abc.Messageable, args: str
+    ) -> None:
+        if name == "screenshot":
+            # Not actually reachable today (screenshot has no bang surface)
+            # but keep the dispatch consistent for future changes.
+            await self._do_screenshot(channel)
+            return
+        text = await self._invoke_text_command(name, args)
+        if text is None:
+            return
+        # Long help / cost output can exceed Discord's 2000-char message
+        # cap. Spill to an attachment when over the safety threshold.
+        if len(text) > 1900:
+            buf = io.BytesIO(text.encode("utf-8"))
+            await channel.send(
+                content="output too long for one message; full text attached:",
+                file=discord.File(buf, filename=f"{name}.txt"),
+            )
+            return
+        await channel.send(text)
+
+    async def _invoke_text_command(self, name: str, args: str) -> str | None:
+        """Run a text-producing handler. Returns the text to send, or None
+        if the command produces no text response (e.g. screenshot)."""
+        if name == "help":
+            return self._do_help(args)
+        if name == "ping":
+            return "pong"
+        if name == "stop":
+            return await self._do_stop()
+        if name == "status":
+            return self._do_status()
+        if name == "cost":
+            return self._do_cost(args)
+        log.warning("text command not implemented: %s", name)
+        return None
+
+    # ----------------------------------------------------------------- #
+    # Individual command handlers                                       #
+    # ----------------------------------------------------------------- #
+
+    def _do_help(self, args: str) -> str:
+        args = args.strip()
+        if not args:
+            return render_overview(self._commands)
+        # Allow "!help cost", "!help /cost", "!help !cost" — strip the prefix.
+        target = args.lstrip("/!").strip()
+        detail = render_detail(target, self._commands)
+        if detail is None:
+            return f"no such command: `{args}`. Try `!help` for the list."
+        return detail
+
+    async def _do_stop(self) -> str:
+        log.info("stop requested")
+        if self._broker is None or not self._broker.is_busy:
+            return "nothing in flight."
+        await self._broker.interrupt()
+        return "stopped."
+
+    def _do_status(self) -> str:
         broker_busy = bool(self._broker is not None and self._broker.is_busy)
         agent_connected = self._agent is not None
         session = self._session
@@ -209,7 +381,43 @@ class DispatchBot(discord.Client):
             session_active=session_active,
             seconds_until_idle=seconds_until_idle,
         )
-        await message.channel.send(f"```\n{text}\n```")
+        return f"```\n{text}\n```"
+
+    def _do_cost(self, args: str) -> str:
+        try:
+            period = usage.parse_period(args)
+        except ValueError as e:
+            return f":x: {e}"
+        return usage.summarize(self._usage_log_path, period)
+
+    async def _do_screenshot(self, channel: discord.abc.Messageable) -> None:
+        """Capture and post a screenshot directly. Skips the LLM.
+
+        Reuses the existing screenshot tool by setting the channel context
+        the way the agent does. We don't surface the SDK content blocks
+        (we're not in an agent turn) -- just the side effect of posting
+        the image to chat.
+        """
+        from .tools.screen import _screenshot  # local import: avoid circular at module load
+
+        token = set_channel(channel)
+        try:
+            result = await _screenshot({"monitor": 0})
+        finally:
+            reset_channel(token)
+        # The tool already posted the image. Surface any error.
+        if isinstance(result, dict) and result.get("is_error"):
+            text_blocks = [
+                blk.get("text", "")
+                for blk in result.get("content", [])
+                if isinstance(blk, dict) and blk.get("type") == "text"
+            ]
+            err = " ".join(t for t in text_blocks if t) or "screenshot failed"
+            await channel.send(f":x: {err}")
+
+    # ----------------------------------------------------------------- #
+    # Agent dispatch (unchanged shape, fed only on the cold path)       #
+    # ----------------------------------------------------------------- #
 
     async def _dispatch_to_agent(self, message: discord.Message) -> None:
         if self._broker is None:
@@ -221,6 +429,14 @@ class DispatchBot(discord.Client):
                 ":hourglass: still working on the previous message; use `!stop` to abort"
             )
             return
+
+        images = await self._extract_image_attachments(message)
+        prompt: str | UserTurn
+        if images:
+            prompt = UserTurn(text=message.content, images=tuple(images))
+            log.info("dispatching turn with %d image attachment(s)", len(images))
+        else:
+            prompt = message.content
 
         sink = DiscordResponseSink(message.channel)
         token = set_channel(message.channel)
@@ -239,7 +455,7 @@ class DispatchBot(discord.Client):
                 reset_channel(token)
 
         async with message.channel.typing():
-            ok = self._broker.submit_nowait(message.content, "discord", extra_sinks=[sink])
+            ok = self._broker.submit_nowait(prompt, "discord", extra_sinks=[sink])
             if not ok:
                 await message.channel.send(
                     ":hourglass: still working on the previous message; use `!stop` to abort"
@@ -249,6 +465,43 @@ class DispatchBot(discord.Client):
             task = asyncio.create_task(_finalize())
             self._finalize_tasks.add(task)
             task.add_done_callback(self._finalize_tasks.discard)
+
+    async def _extract_image_attachments(
+        self, message: discord.Message
+    ) -> list[ImageBlob]:
+        """Pull image attachments off a message. Skips non-images and oversize files.
+
+        5 MB per image is the cap -- comfortably under Discord's 25 MB upload
+        limit and the Anthropic API's per-image size limit. Oversize images
+        are logged and skipped rather than silently truncated; the user gets
+        a "your image was too big" reply if every attachment was rejected.
+        """
+        max_bytes = 5 * 1024 * 1024
+        accepted: list[ImageBlob] = []
+        rejected: list[str] = []
+        for att in message.attachments:
+            ct = (att.content_type or "").lower()
+            mime = ct.split(";")[0].strip()
+            if not mime.startswith("image/"):
+                continue
+            if att.size > max_bytes:
+                rejected.append(f"{att.filename} ({att.size} bytes)")
+                continue
+            try:
+                data = await att.read()
+            except Exception:
+                log.exception("download failed for attachment %s", att.filename)
+                rejected.append(att.filename)
+                continue
+            accepted.append(ImageBlob(mime_type=mime, data=data))
+        if rejected and not accepted:
+            await message.channel.send(
+                ":warning: attachment(s) skipped (>5 MB or download failed): "
+                + ", ".join(rejected)
+            )
+        elif rejected:
+            log.info("partial attachment rejection: %s", ", ".join(rejected))
+        return accepted
 
 
 def _resolve_system_prompt(agent_cfg: AgentConfig) -> str:
