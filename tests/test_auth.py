@@ -10,6 +10,7 @@ CFG = DiscordConfig(
     stop_command="!stop",
     ping_command="ping",
     status_command="!status",
+    stay_command="!stay",
 )
 
 

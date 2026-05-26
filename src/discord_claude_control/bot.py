@@ -10,6 +10,7 @@ from pathlib import Path
 import discord
 from discord import app_commands
 
+from . import usage
 from .agent import AgentSession, ImageBlob, UserTurn
 from .attach_server import AttachServer
 from .audit import setup_audit_logger
@@ -25,13 +26,13 @@ from .commands import (
 from .config import AgentConfig, Config, Secrets
 from .discord_sink import DiscordResponseSink
 from .health import format_status, run_heartbeat_loop
+from .keepalive import KeepAlive
 from .power import PowerRequest
 from .session import SessionState
 from .session_persist import SessionIdStore
 from .system_prompt import DEFAULT_SYSTEM_PROMPT
 from .tools import build_tools
 from .tools._context import reset_channel, set_bot, set_channel
-from . import usage
 
 log = logging.getLogger(__name__)
 
@@ -53,12 +54,15 @@ class DispatchBot(discord.Client):
         self._session_task: asyncio.Task[None] | None = None
         self._heartbeat_stop: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._keepalive_stop: asyncio.Event | None = None
+        self._keepalive_task: asyncio.Task[None] | None = None
         self._finalize_tasks: set[asyncio.Task[None]] = set()
         self._started_at: float = time.time()
         self._commands: tuple[ResolvedCommand, ...] = resolve(
             stop=config.discord.stop_command,
             ping=config.discord.ping_command,
             status=config.discord.status_command,
+            stay=config.discord.stay_command,
         )
         self._usage_log_path = Path(config.logging.usage_log_path)
         self.tree = app_commands.CommandTree(self)
@@ -122,6 +126,12 @@ class DispatchBot(discord.Client):
         self._heartbeat_stop = asyncio.Event()
         self._heartbeat_task = asyncio.create_task(run_heartbeat_loop(self._heartbeat_stop))
 
+        # Pre-sleep warning task. Watches OS sleep timer + last user input
+        # and posts plain channel.send() reminders so the operator can
+        # !stay before the PC drops into Modern Standby. Zero token cost.
+        if self.config.keepalive.enabled:
+            self._start_keepalive(session)
+
         if self.config.attach.enabled:
             self._attach = AttachServer(
                 self._broker, self.config.attach.host, self.config.attach.port
@@ -138,6 +148,44 @@ class DispatchBot(discord.Client):
         except Exception:
             log.exception("slash sync failed; / commands will not appear")
 
+    def _start_keepalive(self, session: SessionState) -> None:
+        thresholds = tuple(m * 60 for m in self.config.keepalive.warn_at_minutes)
+        keepalive = KeepAlive(
+            session=session,
+            notifier=self._post_to_allowed_channel,
+            thresholds_seconds=thresholds,
+            poll_interval_s=float(self.config.keepalive.poll_interval_seconds),
+            warn_on_battery=self.config.keepalive.warn_on_battery,
+            stay_command=self.config.discord.stay_command,
+        )
+        self._keepalive_stop = asyncio.Event()
+        self._keepalive_task = asyncio.create_task(keepalive.run(self._keepalive_stop))
+        log.info(
+            "keepalive armed: thresholds=%s warn_on_battery=%s poll=%ds",
+            list(self.config.keepalive.warn_at_minutes),
+            self.config.keepalive.warn_on_battery,
+            self.config.keepalive.poll_interval_seconds,
+        )
+
+    async def _post_to_allowed_channel(self, content: str) -> None:
+        """Send `content` to the configured user channel.
+
+        Used by background tasks (keepalive) that don't have a Message in hand.
+        Silent no-op if the channel isn't resolvable yet (e.g. fired before
+        on_ready fills the guild cache).
+        """
+        ch = self.get_channel(self.config.discord.allowed_channel_id)
+        if ch is None:
+            try:
+                ch = await self.fetch_channel(self.config.discord.allowed_channel_id)
+            except Exception:
+                log.debug("notifier could not resolve channel; skipping", exc_info=True)
+                return
+        if not isinstance(ch, discord.abc.Messageable):
+            log.debug("configured channel is not Messageable; skipping notifier send")
+            return
+        await ch.send(content)
+
     async def close(self) -> None:
         if self._attach is not None:
             try:
@@ -145,6 +193,14 @@ class DispatchBot(discord.Client):
             except Exception:
                 log.exception("attach server stop raised")
             self._attach = None
+        if self._keepalive_stop is not None:
+            self._keepalive_stop.set()
+        if self._keepalive_task is not None:
+            try:
+                await self._keepalive_task
+            except Exception:
+                log.exception("keepalive loop crashed on shutdown")
+            self._keepalive_task = None
         if self._heartbeat_stop is not None:
             self._heartbeat_stop.set()
         if self._heartbeat_task is not None:
@@ -339,6 +395,8 @@ class DispatchBot(discord.Client):
             return await self._do_stop()
         if name == "status":
             return self._do_status()
+        if name == "stay":
+            return self._do_stay()
         if name == "cost":
             return self._do_cost(args)
         log.warning("text command not implemented: %s", name)
@@ -382,6 +440,17 @@ class DispatchBot(discord.Client):
             seconds_until_idle=seconds_until_idle,
         )
         return f"```\n{text}\n```"
+
+    def _do_stay(self) -> str:
+        """Hold the PC awake. Pings the session; no agent dispatch."""
+        if self._session is None:
+            return ":x: session not initialized; try again in a moment."
+        self._session.ping("manual !stay")
+        idle_minutes = self.config.session.idle_timeout_minutes
+        return (
+            f":coffee: staying awake. PowerRequest held for ~{idle_minutes}m of inactivity. "
+            f"Send another `{self.config.discord.stay_command}` (or any message) to extend."
+        )
 
     def _do_cost(self, args: str) -> str:
         try:

@@ -15,22 +15,23 @@ from discord_claude_control.commands import (
 
 @pytest.fixture
 def resolved() -> tuple:
-    return resolve(stop="!stop", ping="ping", status="!status")
+    return resolve(stop="!stop", ping="ping", status="!status", stay="!stay")
 
 
 def test_resolve_applies_overrides() -> None:
-    r = resolve(stop="!halt", ping="alive", status="?how")
+    r = resolve(stop="!halt", ping="alive", status="?how", stay="?stay")
     by_name = {c.spec.name: c.bang for c in r}
     assert by_name["stop"] == "!halt"
     assert by_name["ping"] == "alive"
     assert by_name["status"] == "?how"
-    # non-legacy commands keep their built-in bang
+    assert by_name["stay"] == "?stay"
+    # non-overridable commands keep their built-in bang
     assert by_name["help"] == "!help"
     assert by_name["cost"] == "!cost"
 
 
 def test_resolve_screenshot_has_no_bang() -> None:
-    r = resolve(stop="!stop", ping="ping", status="!status")
+    r = resolve(stop="!stop", ping="ping", status="!status", stay="!stay")
     by_name = {c.spec.name: c.bang for c in r}
     assert by_name["screenshot"] is None
 
@@ -60,6 +61,19 @@ def test_stop_is_case_sensitive(resolved: tuple) -> None:
     # !stop matches; !STOP does not.
     assert find_by_bang("!stop", resolved) is not None
     assert find_by_bang("!STOP", resolved) is None
+
+
+def test_stay_matches(resolved: tuple) -> None:
+    match = find_by_bang("!stay", resolved)
+    assert match is not None
+    cmd, tail = match
+    assert cmd.spec.name == "stay"
+    assert tail == ""
+
+
+def test_stay_rejects_args(resolved: tuple) -> None:
+    # takes_args=False on stay -- trailing tokens should not match
+    assert find_by_bang("!stay please", resolved) is None
 
 
 def test_takes_args_no_args(resolved: tuple) -> None:
@@ -104,10 +118,12 @@ def test_render_overview_lists_all_surfaces(resolved: tuple) -> None:
     assert "!stop" in out
     assert "ping" in out
     assert "!status" in out
+    assert "!stay" in out
     # slash surface members
     assert "/help" in out
     assert "/stop" in out
     assert "/status" in out
+    assert "/stay" in out
     assert "/cost" in out
     assert "/screenshot" in out
     # screenshot has no message form, so the bang section should not advertise it
@@ -122,6 +138,12 @@ def test_render_detail_known_command(resolved: tuple) -> None:
     assert "!cost" in out
     assert "/cost" in out
     assert "today" in out
+
+
+def test_render_detail_stay_explains_token_cost(resolved: tuple) -> None:
+    out = render_detail("stay", resolved)
+    assert out is not None
+    assert "no" in out.lower() and "token" in out.lower()
 
 
 def test_render_detail_unknown_returns_none(resolved: tuple) -> None:

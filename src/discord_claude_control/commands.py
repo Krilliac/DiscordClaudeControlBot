@@ -9,10 +9,9 @@ state. Adding a new command means:
   2. add the handler method to DispatchBot in bot.py
   3. wire it in DispatchBot._dispatch_command / the slash registration
 
-The three legacy commands (stop, ping, status) carry their bang strings
-in DiscordConfig for backward compatibility; resolve() folds the
-overrides in at startup so the rest of the code sees a single source
-of truth.
+The user-configurable bang strings (stop, ping, status, stay) carry their
+defaults in DiscordConfig; resolve() folds the overrides in at startup so
+the rest of the code sees a single source of truth.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ class CommandSpec:
     bang: str | None
     """Exact-match string for the message surface (e.g. '!help', '!cost').
     None = no fixed default; the resolver supplies it from DiscordConfig
-    (used for stop/ping/status which are user-configurable)."""
+    (used for stop/ping/status/stay which are user-configurable)."""
 
     slash: bool
     """True = also registered as a guild-scoped Discord application command."""
@@ -89,6 +88,19 @@ COMMANDS: Final[tuple[CommandSpec, ...]] = (
         summary="show bot uptime, idle/active state, attach client count",
     ),
     CommandSpec(
+        name="stay",
+        bang=None,
+        slash=True,
+        takes_args=False,
+        summary="hold the PC awake for the configured idle window (no LLM)",
+        detail=(
+            "Pings the session, re-acquires the PowerRequest, and resets\n"
+            "the idle countdown. Use this when a pre-sleep warning posts\n"
+            "and you want to keep the bot reachable without spending tokens.\n"
+            "Costs nothing -- intercepted before any agent dispatch."
+        ),
+    ),
+    CommandSpec(
         name="cost",
         bang="!cost",
         slash=True,
@@ -126,9 +138,15 @@ def resolve(
     stop: str,
     ping: str,
     status: str,
+    stay: str,
 ) -> tuple[ResolvedCommand, ...]:
     """Apply DiscordConfig overrides for the user-configurable bang strings."""
-    overrides: dict[str, str] = {"stop": stop, "ping": ping, "status": status}
+    overrides: dict[str, str] = {
+        "stop": stop,
+        "ping": ping,
+        "status": status,
+        "stay": stay,
+    }
     return tuple(
         ResolvedCommand(spec=c, bang=overrides.get(c.name, c.bang)) for c in commands
     )
