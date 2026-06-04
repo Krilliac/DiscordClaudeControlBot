@@ -20,6 +20,7 @@ class DiscordConfig:
     stop_command: str
     ping_command: str
     status_command: str
+    stay_command: str
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,16 @@ class AttachConfig:
 
 
 @dataclass(frozen=True)
+class KeepaliveConfig:
+    """Pre-sleep warning thresholds and cadence. Token-free notifications."""
+
+    enabled: bool
+    warn_at_minutes: tuple[int, ...]
+    warn_on_battery: bool
+    poll_interval_seconds: int
+
+
+@dataclass(frozen=True)
 class Config:
     discord: DiscordConfig
     agent: AgentConfig
@@ -70,6 +81,7 @@ class Config:
     tools: ToolsConfig
     logging: LoggingConfig
     attach: AttachConfig
+    keepalive: KeepaliveConfig
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,7 @@ def build_config(raw: dict[str, Any]) -> Config:
     tools = _section(raw, "tools")
     logging_ = _section(raw, "logging")
     attach = _section(raw, "attach")
+    keepalive = _section(raw, "keepalive")
 
     discord_cfg = DiscordConfig(
         allowed_user_id=_int(discord, "allowed_user_id"),
@@ -123,20 +136,23 @@ def build_config(raw: dict[str, Any]) -> Config:
         stop_command=_str(discord, "stop_command", default="!stop"),
         ping_command=_str(discord, "ping_command", default="ping"),
         status_command=_str(discord, "status_command", default="!status"),
+        stay_command=_str(discord, "stay_command", default="!stay"),
     )
     for name in ("allowed_user_id", "allowed_channel_id", "allowed_guild_id"):
         if getattr(discord_cfg, name) <= 0:
             raise ConfigError(f"discord.{name} must be a positive Discord snowflake ID")
-    if not discord_cfg.stop_command.strip():
-        raise ConfigError("discord.stop_command must be non-empty")
-    if not discord_cfg.ping_command.strip():
-        raise ConfigError("discord.ping_command must be non-empty")
-    if not discord_cfg.status_command.strip():
-        raise ConfigError("discord.status_command must be non-empty")
-    distinct = {discord_cfg.stop_command, discord_cfg.ping_command, discord_cfg.status_command}
-    if len(distinct) != 3:
+    for cmd_field in ("stop_command", "ping_command", "status_command", "stay_command"):
+        if not getattr(discord_cfg, cmd_field).strip():
+            raise ConfigError(f"discord.{cmd_field} must be non-empty")
+    distinct = {
+        discord_cfg.stop_command,
+        discord_cfg.ping_command,
+        discord_cfg.status_command,
+        discord_cfg.stay_command,
+    }
+    if len(distinct) != 4:
         raise ConfigError(
-            "discord.stop_command, ping_command, and status_command must all differ"
+            "discord.stop_command, ping_command, status_command, and stay_command must all differ"
         )
 
     agent_cfg = AgentConfig(
@@ -198,6 +214,18 @@ def build_config(raw: dict[str, Any]) -> Config:
     if attach_cfg.enabled and not (1 <= attach_cfg.port <= 65535):
         raise ConfigError("attach.port must be in [1, 65535]")
 
+    warn_minutes = _int_list(keepalive, "warn_at_minutes", default=[60, 30, 15, 5])
+    keepalive_cfg = KeepaliveConfig(
+        enabled=_bool(keepalive, "enabled", default=True),
+        warn_at_minutes=tuple(sorted(set(warn_minutes), reverse=True)),
+        warn_on_battery=_bool(keepalive, "warn_on_battery", default=False),
+        poll_interval_seconds=_int(keepalive, "poll_interval_seconds", default=30),
+    )
+    if any(m <= 0 for m in keepalive_cfg.warn_at_minutes):
+        raise ConfigError("keepalive.warn_at_minutes entries must all be > 0")
+    if keepalive_cfg.poll_interval_seconds <= 0:
+        raise ConfigError("keepalive.poll_interval_seconds must be > 0")
+
     return Config(
         discord=discord_cfg,
         agent=agent_cfg,
@@ -205,6 +233,7 @@ def build_config(raw: dict[str, Any]) -> Config:
         tools=tools_cfg,
         logging=logging_cfg,
         attach=attach_cfg,
+        keepalive=keepalive_cfg,
     )
 
 
@@ -269,6 +298,18 @@ def _str_list(section: dict[str, Any], key: str, *, default: list[str]) -> list[
         return list(default)
     if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
         raise ConfigError(f"config: {key} must be a list of strings")
+    return list(value)
+
+
+def _int_list(section: dict[str, Any], key: str, *, default: list[int]) -> list[int]:
+    value = section.get(key, _MISSING)
+    if value is _MISSING:
+        return list(default)
+    if not isinstance(value, list):
+        raise ConfigError(f"config: {key} must be a list of integers")
+    for x in value:
+        if isinstance(x, bool) or not isinstance(x, int):
+            raise ConfigError(f"config: {key} entries must be integers")
     return list(value)
 
 
